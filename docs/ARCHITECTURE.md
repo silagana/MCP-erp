@@ -4,7 +4,39 @@
 
 Un ERP donde la única puerta de entrada y salida es WhatsApp. No hay panel web separado para el día a día: alumnos, profesores y administración interactúan con el mismo número, y el sistema resuelve qué puede ver y hacer cada uno según su rol. La complejidad tradicional de un ERP (esquema de datos + carga + visualización) se reemplaza por un agente que conoce el esquema, ejecuta operaciones acotadas por rol, y genera la vista adecuada (texto, WhatsApp Flow o archivo) según lo que se pide.
 
-**Importante:** ya existe una base real — el repo `silagana/st-clares-app` (Streamlit + SQLAlchemy + Alembic, pensado para Railway). No se reescribe el esquema ni la lógica de negocio: el MCP se conecta a esa misma base y reutiliza esos services. El Streamlit queda como panel de administración/conciliación pesada; WhatsApp se suma como segunda puerta, liviana, sobre la misma lógica.
+**Importante — decisión revisada (ver sección 1.1):** existía una base real —
+el repo `silagana/st-clares-app` (Streamlit + SQLAlchemy + Alembic). El plan
+original era que MCP-erp se conectara a esa misma Postgres. Se decidió en
+cambio que **MCP-erp sea independiente**: tiene su propia Postgres y su
+propio esquema, copiado de `st-clares-app` como punto de partida. El
+Streamlit se da de baja una vez migrados los datos — MCP-erp pasa a ser el
+único sistema.
+
+## 1.1 Independencia de st-clares-app (decisión, 2026-09-07)
+
+El plan original (`app/models.py` importando o sincronizado a mano con
+`st-clares-app/db/models.py`, misma Postgres) se descartó. En su lugar:
+
+- **Esquema propio:** `app/models.py` es una copia de
+  `st-clares-app/db/models.py` (tablas de dominio idénticas: `Sede`, `Curso`,
+  `PrecioHistorico`, `Alumno`, `ReferentePago`, `Inscripcion`, `Cuota`,
+  `MovimientoBancario`, `Pago`, `Imputacion`, `AliasCobroAlumno`,
+  `PatronNoAlumno`, `AuditLog`), más dos tablas nuevas que no existían del
+  lado del Streamlit: `Profesor` y `UsuarioWhatsapp`. De acá en adelante el
+  esquema evoluciona solo en este repo — no hay sincronización manual
+  continua con `st-clares-app`.
+- **Services propios:** `enrollment.py`, `reconciliation.py`, `bank_import.py`
+  se copiaron tal cual a `app/services/` (imports adaptados a `app.models` en
+  vez de `db.models`). `cash_payments.py` sigue como stub — tampoco estaba
+  implementado en el origen.
+- **Postgres propia:** servicio Railway separado del que usa `st-clares-app`.
+- **Migración única de datos:** `scripts/migrate_from_st_clares.py` copia los
+  datos existentes (alumnos, cursos, cuotas, pagos, etc.) de la Postgres de
+  `st-clares-app` a la Postgres de MCP-erp, tabla por tabla respetando
+  foreign keys. Se corre una sola vez, con el esquema de destino ya creado.
+- **st-clares-app se abandona:** una vez migrados los datos y validado
+  MCP-erp, el panel Streamlit deja de usarse. No hay sincronización
+  bidireccional ni convivencia a largo plazo entre las dos apps.
 
 ## 2. Arquitectura
 
@@ -18,7 +50,7 @@ WhatsApp Cloud API (único canal in/out)
 Orchestrator (Railway) — Claude Haiku 4.5 + cliente MCP
         |  tool call
         v
-Servidor MCP -> misma Postgres que usa el Streamlit (Railway)
+Servidor MCP -> Postgres propia de MCP-erp (Railway, independiente de st-clares-app)
 ```
 
 La respuesta vuelve por el mismo camino. Reportes pesados o de tablas complejas se generan como imagen/PDF y se mandan como archivo; para altas y cobros se usa WhatsApp Flow (formulario nativo dentro del chat) en vez de forzar todo a texto libre.
@@ -29,9 +61,9 @@ La respuesta vuelve por el mismo camino. Reportes pesados o de tablas complejas 
 - **Hosting:** Railway — ya está en `railway.toml` del repo. Orchestrator + servidor MCP se suman al mismo proyecto/base.
 - **Modelo:** `claude-haiku-4-5` como default (USD 1/M input, USD 5/M output). Escalar a Sonnet 5 solo en razonamiento ambiguo (ej. disputas de pago).
 
-## 3. Base real ya existente (no se duplica)
+## 3. Esquema propio (copiado de st-clares-app como punto de partida)
 
-Repo: `silagana/st-clares-app`. Modelos en `db/models.py` (SQLAlchemy + Alembic):
+`app/models.py` de este repo:
 
 - `Sede`, `Curso` (con `monto_matricula`, `monto_cuota_mensual`, `cantidad_cuotas`, `derecho_examen_monto`), `PrecioHistorico` (versionado de precios — esto YA resuelve el tema de aumentos).
 - `Alumno`, `ReferentePago` (padre/madre/empresa con su propio CUIT — clave para facturar bien).
@@ -39,10 +71,11 @@ Repo: `silagana/st-clares-app`. Modelos en `db/models.py` (SQLAlchemy + Alembic)
 - `Cuota` (`tipo`: matricula/mensual/examen; `monto_original` vs `monto_actualizado`; `saldo_pendiente`).
 - `MovimientoBancario`, `Pago`, `Imputacion` (distribución FIFO de pagos contra cuotas impagas), `AliasCobroAlumno` (alias guardado por alumno para matchear transferencias), `PatronNoAlumno`.
 - `AuditLog`.
+- **Nuevas, no existían en st-clares-app:** `Profesor`, `UsuarioWhatsapp`.
 
-Services ya funcionando: `enrollment.py` (generación de cuotas, recálculo de precios respetando pagos parciales, altas/bajas, inscripción provisional), `reconciliation.py` (matching por CUIT/alias/fuzzy con `rapidfuzz`, FIFO), `bank_import.py` (parseo de resumen bancario PDF/TSV).
+Services ya copiados a `app/services/` y funcionando (misma lógica que el origen): `enrollment.py` (generación de cuotas, recálculo de precios respetando pagos parciales, altas/bajas, inscripción provisional), `reconciliation.py` (matching por CUIT/alias/fuzzy con `rapidfuzz`, FIFO), `bank_import.py` (parseo de resumen bancario PDF/TSV).
 
-Services que están como **stub, sin implementar** (marcados `"Implementado en M5/M6"` en el propio código): `whatsapp_text.py`, `cash_payments.py`, `reports.py`. Auth actual (`utils/auth.py`) es un solo usuario admin/contraseña — no hay roles por persona todavía, hay que sumarlo para WhatsApp.
+Services que siguen como **stub, sin implementar** (ya lo estaban en el origen): `cash_payments.py`. `whatsapp_text.py` y `reports.py` no se copiaron todavía — se escriben nuevos acá cuando llegue su etapa (ver sección 5 y 9). No hay auth por usuario todavía del lado de MCP-erp — la resuelve `UsuarioWhatsapp` por rol, no un login (ver sección 4).
 
 ## 4. Roles por número de WhatsApp (a construir)
 
@@ -140,14 +173,26 @@ Organizado por si ya existe la lógica de base (se envuelve) o hay que crearla.
 3. Alta de prospecto vía WhatsApp Flow, con conversión a alumno al confirmar.
 4. Alerta de cupo por agotarse, para abrir nueva cohorte.
 
-## 9. Plan (revisado — ya no se arranca de cero)
+## 9. Plan de pasos a seguir
 
-| Etapa | Entregable |
-|---|---|
-| 1 | Tabla `usuario_whatsapp` + resolución de rol en el servidor MCP |
-| 2 | MCP envolviendo lo que ya existe: alumnos, inscripciones, cuotas, conciliación (secciones con ✅ arriba) |
-| 3 | Completar `cash_payments.py` (cobros). `whatsapp_text.py` se diseña pero **no se activa** — queda gateado (ver sección 5) |
-| 4 | Integración WhatsApp Cloud API + primer WhatsApp Flow (alta/cobro) — solo mensajería entrante/respuesta, nada de saliente automático todavía |
-| 5 | Prueba con una semana real de actividad; ajustar tools según malentendidos del agente |
-| 6 | Confirmar tarifa de WhatsApp para Argentina post 1/10 y activar recordatorios + envío de factura mensual |
-| 7 | AFIP (cuando esté definida la condición fiscal) |
+| # | Etapa | Estado |
+|---|---|---|
+| 0.1 | Scaffold del repo (README, ARCHITECTURE.md, esqueletos de `app/`) recuperado y pusheado a `github.com/silagana/MCP-erp` | ✅ hecho |
+| 0.2 | Esquema propio: `app/models.py` copiado de `st-clares-app/db/models.py`, agregadas `Profesor` y `UsuarioWhatsapp` | ✅ hecho |
+| 0.3 | Services copiados a `app/services/` (`enrollment.py`, `reconciliation.py`, `bank_import.py`) con imports adaptados; `cash_payments.py` como stub | ✅ hecho |
+| 0.4 | Script de migración única `scripts/migrate_from_st_clares.py` (esqueleto funcional, copia tabla por tabla respetando FKs) | ✅ hecho |
+| 1 | Crear el servicio Postgres propio de MCP-erp en Railway (separado del de `st-clares-app`) | pendiente |
+| 2 | Generar el esquema en la Postgres nueva: `Base.metadata.create_all` o (mejor, para el futuro) inicializar Alembic acá y usar `alembic upgrade head` | pendiente |
+| 3 | Correr `scripts/migrate_from_st_clares.py` contra los datos reales de `st-clares-app` (requiere `SOURCE_DATABASE_URL` de producción) — probar primero con `--dry-run` | pendiente |
+| 4 | Cargar `usuario_whatsapp` con los números reales (owner, administrativos, y opcionalmente profesores/alumnos) — a mano o con un script chico | pendiente |
+| 5 | Implementar `app/mcp_server.py`: registrar las tools de alumnos/inscripciones/cuotas/conciliación (sección 5), cada una resolviendo el rol por `UsuarioWhatsapp` antes de tocar la base | pendiente |
+| 6 | Completar `services/cash_payments.py` (cobros en efectivo) | pendiente |
+| 7 | Implementar `app/orchestrator.py`: historial de conversación por teléfono, resolución de rol, carga de tools MCP, llamada a `claude-haiku-4-5` | pendiente |
+| 8 | Implementar `app/whatsapp_webhook.py`: extraer mensaje + teléfono del payload de Meta, pasar al orchestrator, responder | pendiente |
+| 9 | Deploy en Railway (webhook + orchestrator + Postgres nueva), configurar el webhook en Meta, probar primer WhatsApp Flow (alta/cobro) | pendiente |
+| 10 | Prueba con una semana real de actividad; ajustar tools según malentendidos del agente | pendiente |
+| 11 | Validar MCP-erp en uso real → dar de baja `st-clares-app` (Streamlit) | pendiente |
+| 12 | `whatsapp_text.py` (recordatorios, avisos de mora, factura mensual): confirmar tarifa de WhatsApp para Argentina post 1/10/2026 y activar | en pausa (ver sección 7) |
+| 13 | AFIP (cuando esté definida la condición fiscal del instituto) | futuro |
+
+**Próximo paso inmediato:** etapa 1 — crear el servicio Postgres de MCP-erp en Railway.

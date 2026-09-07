@@ -1,4 +1,5 @@
-"""Conexión a la MISMA Postgres que usa st-clares-app. No se crea esquema nuevo acá."""
+"""Conexión a la Postgres propia de MCP-erp — independiente de st-clares-app
+(ver docs/ARCHITECTURE.md, sección "Independencia de st-clares-app")."""
 import os
 
 from sqlalchemy import create_engine
