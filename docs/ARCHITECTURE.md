@@ -181,8 +181,8 @@ Organizado por si ya existe la lógica de base (se envuelve) o hay que crearla.
 | 0.2 | Esquema propio: `app/models.py` copiado de `st-clares-app/db/models.py`, agregadas `Profesor` y `UsuarioWhatsapp` | ✅ hecho |
 | 0.3 | Services copiados a `app/services/` (`enrollment.py`, `reconciliation.py`, `bank_import.py`) con imports adaptados; `cash_payments.py` como stub | ✅ hecho |
 | 0.4 | Script de migración única `scripts/migrate_from_st_clares.py` (esqueleto funcional, copia tabla por tabla respetando FKs) | ✅ hecho |
-| 1 | Crear el servicio Postgres propio de MCP-erp en Railway (separado del de `st-clares-app`) | pendiente |
-| 2 | Generar el esquema en la Postgres nueva: `Base.metadata.create_all` o (mejor, para el futuro) inicializar Alembic acá y usar `alembic upgrade head` | pendiente |
+| 1 | Crear el servicio Postgres propio de MCP-erp en Railway (separado del de `st-clares-app`). También se desplegó el servicio `MCP-erp` en sí (conectado al repo de GitHub), aunque el código todavía no hace nada útil | ✅ hecho |
+| 2 | Generar el esquema en la Postgres nueva vía Alembic: migración inicial generada y aplicada (`alembic upgrade head`) desde la consola de Railway, contra el Postgres real. Migración commiteada en `migrations/versions/bc81eb3b5c09_initial_schema.py` | ✅ hecho |
 | 3 | Correr `scripts/migrate_from_st_clares.py` contra los datos reales de `st-clares-app` (requiere `SOURCE_DATABASE_URL` de producción) — probar primero con `--dry-run` | pendiente |
 | 4 | Cargar `usuario_whatsapp` con los números reales (owner, administrativos, y opcionalmente profesores/alumnos) — a mano o con un script chico | pendiente |
 | 5 | Implementar `app/mcp_server.py`: registrar las tools de alumnos/inscripciones/cuotas/conciliación (sección 5), cada una resolviendo el rol por `UsuarioWhatsapp` antes de tocar la base | pendiente |
@@ -195,4 +195,4 @@ Organizado por si ya existe la lógica de base (se envuelve) o hay que crearla.
 | 12 | `whatsapp_text.py` (recordatorios, avisos de mora, factura mensual): confirmar tarifa de WhatsApp para Argentina post 1/10/2026 y activar | en pausa (ver sección 7) |
 | 13 | AFIP (cuando esté definida la condición fiscal del instituto) | futuro |
 
-**Próximo paso inmediato:** etapa 1 — crear el servicio Postgres de MCP-erp en Railway.
+**Próximo paso inmediato:** etapa 3 — correr la migración de datos desde `st-clares-app`.
