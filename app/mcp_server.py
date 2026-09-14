@@ -23,12 +23,82 @@ from mcp.server.mcpserver import MCPServer
 
 from app.db import SessionLocal
 from app.models import (
-    Alumno, Curso, EstadoCuotaEnum, Inscripcion, Profesor, RolWhatsappEnum,
+    Alumno, Curso, EstadoCuotaEnum, Inscripcion, Profesor, RolWhatsappEnum, Sede,
 )
-from app.permissions import require_alumno_propio_o_administrativo, require_rol
+from app.permissions import (
+    require_alumno_propio_o_administrativo, require_rol, resolver_usuario,
+)
+from app.permissions import AccesoDenegado
 from app.services import enrollment, reconciliation
 
 server = MCPServer("st-clares-erp")
+
+
+@server.tool()
+def listar_sedes(telefono: str) -> dict:
+    """Lista las sedes activas con su id y nombre — usar esto para resolver
+    a qué sede_id corresponde un nombre de sede (ej. "Caballito") antes de
+    llamar a otra tool que pida sede_id. Cualquier usuario registrado puede usarla."""
+    with SessionLocal() as session:
+        if resolver_usuario(session, telefono) is None:
+            raise AccesoDenegado(f"El número {telefono} no está registrado.")
+        sedes = session.query(Sede).filter(Sede.activa == True).all()
+        return {"sedes": [{"id": s.id, "nombre": s.nombre} for s in sedes]}
+
+
+@server.tool()
+def listar_cursos(telefono: str, sede_id: int | None = None) -> dict:
+    """Lista los cursos activos con id, nombre, nivel, sede y precios vigentes
+    (matrícula y cuota mensual) — usar para resolver curso_id a partir de un
+    nombre antes de llamar a otra tool que lo pida. Filtro opcional por sede_id
+    (ver listar_sedes). Cualquier usuario registrado puede usarla."""
+    with SessionLocal() as session:
+        if resolver_usuario(session, telefono) is None:
+            raise AccesoDenegado(f"El número {telefono} no está registrado.")
+        query = session.query(Curso).filter(Curso.activo == True)
+        if sede_id is not None:
+            query = query.filter(Curso.sede_id == sede_id)
+        return {"cursos": [
+            {
+                "id": c.id,
+                "nombre": c.nombre,
+                "nivel": c.nivel,
+                "sede_id": c.sede_id,
+                "sede": c.sede.nombre,
+                "monto_matricula": c.monto_matricula,
+                "monto_cuota_mensual": c.monto_cuota_mensual,
+            }
+            for c in query.all()
+        ]}
+
+
+@server.tool()
+def buscar_alumno(telefono: str, query: str) -> dict:
+    """Busca alumnos por nombre, apellido o DNI (parcial, no distingue
+    mayúsculas/minúsculas). Devuelve id, nombre completo, dni y sede — usar
+    para resolver alumno_id antes de llamar a otra tool. Rol mínimo: administrativo."""
+    with SessionLocal() as session:
+        require_rol(session, telefono, {RolWhatsappEnum.administrativo})
+        patron = f"%{query.strip()}%"
+        alumnos = (
+            session.query(Alumno)
+            .filter(
+                (Alumno.nombre.ilike(patron))
+                | (Alumno.apellido.ilike(patron))
+                | (Alumno.dni.ilike(patron))
+            )
+            .limit(15)
+            .all()
+        )
+        return {"alumnos": [
+            {
+                "id": a.id,
+                "nombre_completo": f"{a.apellido}, {a.nombre}",
+                "dni": a.dni,
+                "sede": a.sede.nombre,
+            }
+            for a in alumnos
+        ]}
 
 
 # ── Alumnos e inscripciones (envuelve services/enrollment.py) ──────────────
@@ -270,7 +340,8 @@ def consultar_estado_cuenta(telefono: str, alumno_id: int | None = None) -> dict
 @server.tool()
 def consultar_morosos(telefono: str, sede_id: int | None = None) -> dict:
     """Reporte de cuotas vencidas sin pagar (pendiente o parcial, vencimiento
-    ya pasado), opcionalmente filtrado por sede. Rol mínimo: administrativo."""
+    ya pasado), opcionalmente filtrado por sede (usar listar_sedes para
+    resolver el sede_id a partir del nombre). Rol mínimo: administrativo."""
     with SessionLocal() as session:
         require_rol(session, telefono, {RolWhatsappEnum.administrativo})
         query = (
