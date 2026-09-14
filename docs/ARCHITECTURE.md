@@ -184,7 +184,7 @@ Organizado por si ya existe la lógica de base (se envuelve) o hay que crearla.
 | 1 | Crear el servicio Postgres propio de MCP-erp en Railway (separado del de `st-clares-app`). También se desplegó el servicio `MCP-erp` en sí (conectado al repo de GitHub), aunque el código todavía no hace nada útil | ✅ hecho |
 | 2 | Generar el esquema en la Postgres nueva vía Alembic: migración inicial generada y aplicada (`alembic upgrade head`) desde la consola de Railway, contra el Postgres real. Migración commiteada en `migrations/versions/bc81eb3b5c09_initial_schema.py` | ✅ hecho |
 | 3 | Correr `scripts/migrate_from_st_clares.py` contra los datos reales de `st-clares-app` (requiere `SOURCE_DATABASE_URL` de producción) — probar primero con `--dry-run` | pendiente |
-| 4 | Cargar `usuario_whatsapp` con los números reales (owner, administrativos, y opcionalmente profesores/alumnos) — a mano o con un script chico | pendiente |
+| 4 | Cargar `usuario_whatsapp` con los números reales — `scripts/seed_usuario_whatsapp.py` (idempotente), owner cargado (`5491141996958`) | ✅ hecho |
 | 5 | Implementar `app/mcp_server.py`: registrar las tools de alumnos/inscripciones/cuotas/conciliación (sección 5), cada una resolviendo el rol por `UsuarioWhatsapp` antes de tocar la base | pendiente |
 | 6 | Completar `services/cash_payments.py` (cobros en efectivo) | pendiente |
 | 7 | Implementar `app/orchestrator.py`: historial de conversación por teléfono, resolución de rol, carga de tools MCP, llamada a `claude-haiku-4-5` | pendiente |
@@ -195,4 +195,4 @@ Organizado por si ya existe la lógica de base (se envuelve) o hay que crearla.
 | 12 | `whatsapp_text.py` (recordatorios, avisos de mora, factura mensual): confirmar tarifa de WhatsApp para Argentina post 1/10/2026 y activar | en pausa (ver sección 7) |
 | 13 | AFIP (cuando esté definida la condición fiscal del instituto) | futuro |
 
-**Próximo paso inmediato:** etapa 3 — correr la migración de datos desde `st-clares-app`.
+**Próximo paso inmediato:** etapa 5 — implementar las tools del servidor MCP.
