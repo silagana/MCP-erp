@@ -55,6 +55,9 @@ def normalizar_telefono_ar(raw) -> str | None:
     # Viene con 54 pero sin el 9 característico de celulares: 54 + 10 = 12
     if digits.startswith("54") and len(digits) == 12:
         return "549" + digits[2:]
+    # Viene con el "9" pero sin el "54": 9 + 10 dígitos locales = 11
+    if digits.startswith("9") and len(digits) == 11:
+        return "549" + digits[1:]
 
     local = digits
     if local.startswith("0"):
