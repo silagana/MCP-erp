@@ -185,7 +185,8 @@ Organizado por si ya existe la lógica de base (se envuelve) o hay que crearla.
 | 2 | Generar el esquema en la Postgres nueva vía Alembic: migración inicial generada y aplicada (`alembic upgrade head`) desde la consola de Railway, contra el Postgres real. Migración commiteada en `migrations/versions/bc81eb3b5c09_initial_schema.py` | ✅ hecho |
 | 3 | Correr `scripts/migrate_from_st_clares.py` contra los datos reales de `st-clares-app` (requiere `SOURCE_DATABASE_URL` de producción) — probar primero con `--dry-run` | pendiente |
 | 4 | Cargar `usuario_whatsapp` con los números reales — `scripts/seed_usuario_whatsapp.py` (idempotente), owner cargado (`5491141996958`) | ✅ hecho |
-| 5 | Implementar `app/mcp_server.py`: registrar las tools de alumnos/inscripciones/cuotas/conciliación (sección 5), cada una resolviendo el rol por `UsuarioWhatsapp` antes de tocar la base | pendiente |
+| 4.5 | Normalizar teléfonos migrados (`scripts/normalizar_telefonos.py`): los datos de `st-clares-app` traían artefactos de Excel ("nan" literal, ".0" al final). 177 normalizados a formato WhatsApp (549+10 dígitos), 177 sin dato real quedaron en NULL en vez de adivinar mal | ✅ hecho |
+| 5 | Implementar `app/mcp_server.py`: 17 tools de alumnos/inscripciones/cuotas/conciliación/profesores (sección 5), cada una resolviendo el rol por `UsuarioWhatsapp` (`app/permissions.py`) antes de tocar la base. Probado en Railway con datos reales (`registrar_alumno`, `consultar_morosos`) | ✅ hecho |
 | 6 | Completar `services/cash_payments.py` (cobros en efectivo) | pendiente |
 | 7 | Implementar `app/orchestrator.py`: historial de conversación por teléfono, resolución de rol, carga de tools MCP, llamada a `claude-haiku-4-5` | pendiente |
 | 8 | Implementar `app/whatsapp_webhook.py`: extraer mensaje + teléfono del payload de Meta, pasar al orchestrator, responder | pendiente |
@@ -195,4 +196,4 @@ Organizado por si ya existe la lógica de base (se envuelve) o hay que crearla.
 | 12 | `whatsapp_text.py` (recordatorios, avisos de mora, factura mensual): confirmar tarifa de WhatsApp para Argentina post 1/10/2026 y activar | en pausa (ver sección 7) |
 | 13 | AFIP (cuando esté definida la condición fiscal del instituto) | futuro |
 
-**Próximo paso inmediato:** etapa 5 — implementar las tools del servidor MCP.
+**Próximo paso inmediato:** etapa 7 — implementar `app/orchestrator.py` (etapa 6, completar `cash_payments.py`, queda para más adelante — no bloquea el orchestrator).
