@@ -188,12 +188,12 @@ Organizado por si ya existe la lógica de base (se envuelve) o hay que crearla.
 | 4.5 | Normalizar teléfonos migrados (`scripts/normalizar_telefonos.py`): los datos de `st-clares-app` traían artefactos de Excel ("nan" literal, ".0" al final). 177 normalizados a formato WhatsApp (549+10 dígitos), 177 sin dato real quedaron en NULL en vez de adivinar mal | ✅ hecho |
 | 5 | Implementar `app/mcp_server.py`: 17 tools de alumnos/inscripciones/cuotas/conciliación/profesores (sección 5), cada una resolviendo el rol por `UsuarioWhatsapp` (`app/permissions.py`) antes de tocar la base. Probado en Railway con datos reales (`registrar_alumno`, `consultar_morosos`) | ✅ hecho |
 | 6 | Completar `services/cash_payments.py` (cobros en efectivo) | pendiente |
-| 7 | Implementar `app/orchestrator.py`: historial de conversación por teléfono, resolución de rol, carga de tools MCP, llamada a `claude-haiku-4-5` | pendiente |
-| 8 | Implementar `app/whatsapp_webhook.py`: extraer mensaje + teléfono del payload de Meta, pasar al orchestrator, responder | pendiente |
+| 7 | Implementar `app/orchestrator.py`: historial de conversación por teléfono (tabla nueva `mensaje_whatsapp`), resolución de rol, carga de tools MCP (sin exponer `telefono` al modelo — se inyecta server-side), loop de tool-calling con `claude-haiku-4-5`. Sumadas 3 tools de referencia (`listar_sedes`, `listar_cursos`, `buscar_alumno`) — sin esto el modelo no podía resolver nombres a IDs. Probado end-to-end con datos reales (encadenó `listar_sedes` → `consultar_morosos` sola) | ✅ hecho |
+| 8 | Implementar `app/whatsapp_webhook.py`: extraer mensaje + teléfono del payload de Meta, pasar a `procesar_mensaje()`, responder | pendiente |
 | 9 | Deploy en Railway (webhook + orchestrator + Postgres nueva), configurar el webhook en Meta, probar primer WhatsApp Flow (alta/cobro) | pendiente |
 | 10 | Prueba con una semana real de actividad; ajustar tools según malentendidos del agente | pendiente |
 | 11 | Validar MCP-erp en uso real → dar de baja `st-clares-app` (Streamlit) | pendiente |
 | 12 | `whatsapp_text.py` (recordatorios, avisos de mora, factura mensual): confirmar tarifa de WhatsApp para Argentina post 1/10/2026 y activar | en pausa (ver sección 7) |
 | 13 | AFIP (cuando esté definida la condición fiscal del instituto) | futuro |
 
-**Próximo paso inmediato:** etapa 7 — implementar `app/orchestrator.py` (etapa 6, completar `cash_payments.py`, queda para más adelante — no bloquea el orchestrator).
+**Próximo paso inmediato:** etapa 8 — implementar `app/whatsapp_webhook.py` (etapa 6, completar `cash_payments.py`, sigue pendiente — no bloquea).
