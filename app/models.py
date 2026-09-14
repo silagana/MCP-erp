@@ -71,6 +71,10 @@ class RolWhatsappEnum(str, enum.Enum):
     administrativo = "administrativo"
     owner = "owner"
 
+class RolMensajeEnum(str, enum.Enum):
+    user = "user"
+    assistant = "assistant"
+
 
 # ── Tablas (dominio, copiadas de st-clares-app) ────────────────────────────────
 
@@ -302,3 +306,15 @@ class UsuarioWhatsapp(Base):
 
     alumno = relationship("Alumno")
     profesor = relationship("Profesor", back_populates="usuarios_whatsapp")
+
+
+class MensajeWhatsapp(Base):
+    """Historial de conversación por teléfono, para darle memoria al orchestrator
+    entre mensajes (Claude no tiene estado propio entre llamadas a la API)."""
+    __tablename__ = "mensaje_whatsapp"
+
+    id = Column(Integer, primary_key=True)
+    telefono = Column(String(30), nullable=False, index=True)
+    rol = Column(Enum(RolMensajeEnum), nullable=False)
+    contenido = Column(Text, nullable=False)
+    timestamp = Column(DateTime, nullable=False, default=datetime.utcnow)
