@@ -303,6 +303,10 @@ class UsuarioWhatsapp(Base):
     profesor_id = Column(Integer, ForeignKey("profesor.id"))
     activo = Column(Boolean, nullable=False, default=True)
     fecha_alta = Column(DateTime, nullable=False, default=datetime.utcnow)
+    telegram_chat_id = Column(String(30), unique=True)
+    """Canal de prueba alternativo (ver app/telegram_webhook.py) — vincula este
+    mismo usuario/rol a un chat de Telegram, sin tocar el canal de WhatsApp.
+    Se puede dejar de usar (o borrar todos los valores) sin afectar WhatsApp."""
 
     alumno = relationship("Alumno")
     profesor = relationship("Profesor", back_populates="usuarios_whatsapp")

@@ -22,6 +22,30 @@ def resolver_usuario(session: Session, telefono: str) -> UsuarioWhatsapp | None:
     )
 
 
+def resolver_telefono_por_telegram(session: Session, chat_id: str) -> str | None:
+    """Canal de prueba (ver app/telegram_webhook.py): devuelve el `telefono` ya
+    vinculado a este chat de Telegram, si existe, para poder reusar
+    procesar_mensaje() tal cual — el resto del sistema sigue pensando en
+    términos de teléfono/rol de WhatsApp."""
+    usuario = (
+        session.query(UsuarioWhatsapp)
+        .filter(UsuarioWhatsapp.telegram_chat_id == chat_id, UsuarioWhatsapp.activo == True)
+        .first()
+    )
+    return usuario.telefono if usuario else None
+
+
+def vincular_telegram(session: Session, chat_id: str, telefono: str) -> UsuarioWhatsapp | None:
+    """Vincula un chat de Telegram a un usuario ya existente por teléfono.
+    No crea usuarios nuevos — el teléfono tiene que estar ya registrado.
+    Devuelve None si el teléfono no existe."""
+    usuario = resolver_usuario(session, telefono)
+    if usuario is None:
+        return None
+    usuario.telegram_chat_id = chat_id
+    return usuario
+
+
 def require_rol(
     session: Session,
     telefono: str,
