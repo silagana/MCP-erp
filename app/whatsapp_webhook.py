@@ -1,12 +1,16 @@
-"""Recibe mensajes de WhatsApp Cloud API y los pasa al orchestrator.
+"""Punto de entrada único del servicio: WhatsApp (este archivo), el
+dashboard de KPIs (app/dashboard.py) y el canal de prueba de Telegram
+(app/telegram_webhook.py) corren todos acá, en el mismo proceso — un solo
+servicio de Railway. Ver el docstring de cada módulo para desactivar su
+parte sin tocar las demás (ninguna requiere un servicio separado).
 
 GET /webhook: verificación que exige Meta al configurar el webhook la
 primera vez (compara hub.verify_token contra WHATSAPP_VERIFY_TOKEN).
 
-POST /webhook: mensajes entrantes. Responde 200 de inmediato (Meta
-reintenta el envío si no responde rápido o si no es 200) y procesa el
-mensaje en background — llama al orchestrator y manda la respuesta por la
-API de WhatsApp. Solo procesa mensajes de texto; otros tipos (imagen,
+POST /webhook: mensajes entrantes de WhatsApp. Responde 200 de inmediato
+(Meta reintenta el envío si no responde rápido o si no es 200) y procesa
+el mensaje en background — llama al orchestrator y manda la respuesta por
+la API de WhatsApp. Solo procesa mensajes de texto; otros tipos (imagen,
 audio, ubicación, etc.) se ignoran por ahora.
 """
 import os
@@ -16,17 +20,19 @@ from fastapi import BackgroundTasks, FastAPI, Request
 
 from app.dashboard import router as dashboard_router
 from app.orchestrator import procesar_mensaje
+from app.telegram_webhook import router as telegram_router
 
 app = FastAPI()
-# app.include_router(dashboard_router) tiene un bug de cacheo en la versión
-# de FastAPI de este entorno (0.141.1): el router incluido queda envuelto en
-# un _IncludedRouter cuyo effective_candidates nunca se recalcula, y la ruta
-# nunca matchea un request real aunque esté bien definida (confirmado:
-# dashboard_router.routes la tiene). Workaround: agregar los APIRoute del
+# app.include_router(...) tiene un bug de cacheo en la versión de FastAPI de
+# este entorno (0.141.1): el router incluido queda envuelto en un
+# _IncludedRouter cuyo effective_candidates nunca se recalcula, y sus rutas
+# nunca matchean un request real aunque estén bien definidas (confirmado:
+# router.routes las tiene bien). Workaround: agregar los APIRoute de cada
 # router directo a app.router.routes, igual que quedan las rutas @app.get
 # de este mismo archivo — se confirmó que esas sí funcionan.
-for _route in dashboard_router.routes:
-    app.router.routes.append(_route)
+for _router in (dashboard_router, telegram_router):
+    for _route in _router.routes:
+        app.router.routes.append(_route)
 
 VERIFY_TOKEN = os.environ.get("WHATSAPP_VERIFY_TOKEN", "")
 WHATSAPP_TOKEN = os.environ.get("WHATSAPP_TOKEN", "")

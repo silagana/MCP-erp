@@ -1,16 +1,15 @@
-"""Canal de prueba alternativo por Telegram — deliberadamente separado de
-app/whatsapp_webhook.py para poder desactivarlo sin tocar nada de WhatsApp
-cuando WhatsApp esté listo para producción (ver docs/ARCHITECTURE.md).
+"""Canal de prueba alternativo por Telegram — vive como un router más,
+montado sobre el mismo servicio/proceso que app/whatsapp_webhook.py (igual
+que app/dashboard.py). No hace falta un servicio de Railway aparte.
 
 Reusa procesar_mensaje() de app/orchestrator.py tal cual — el resto del
 sistema (permisos, tools, historial) no sabe ni le importa si el mensaje
 vino de Telegram o WhatsApp, todo se resuelve por `telefono`.
 
-Cómo desactivar este canal más adelante:
-- Si corre como servicio Railway aparte (recomendado, ver README): parar o
-  eliminar ese servicio, sin efecto sobre MCP-erp/WhatsApp.
-- Si corre embebido: dejar de configurar el webhook en Telegram
-  (@BotFather / setWebhook) y/o no montar este router.
+Cómo "desactivar" este canal más adelante (sin tocar Railway ni WhatsApp):
+llamar a `https://api.telegram.org/bot<TOKEN>/deleteWebhook` — Telegram
+deja de mandar mensajes a /telegram/webhook. La ruta sigue existiendo en
+el código pero no le pega nadie, no afecta en nada a WhatsApp.
 
 Identidad: un chat de Telegram se vincula a un usuario_whatsapp YA
 EXISTENTE por teléfono (no crea usuarios nuevos). El comando /vincular
@@ -22,13 +21,13 @@ teléfono, a diferencia de WhatsApp donde el número mismo es la identidad.
 import os
 
 import httpx
-from fastapi import BackgroundTasks, FastAPI, Request
+from fastapi import APIRouter, BackgroundTasks, Request
 
 from app.db import SessionLocal
 from app.orchestrator import procesar_mensaje
 from app.permissions import resolver_telefono_por_telegram, vincular_telegram
 
-app = FastAPI()
+router = APIRouter()
 
 TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "")
 TELEGRAM_API_URL = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}"
@@ -77,7 +76,7 @@ async def _procesar_y_responder(chat_id: str, texto: str) -> None:
     await _enviar_respuesta(chat_id, respuesta)
 
 
-@app.post("/telegram/webhook")
+@router.post("/telegram/webhook")
 async def receive(request: Request, background_tasks: BackgroundTasks):
     payload = await request.json()
     mensaje = payload.get("message") or payload.get("edited_message")

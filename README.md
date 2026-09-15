@@ -2,7 +2,8 @@
 
 ERP conversacional por WhatsApp para St. Clare's (instituto de inglés, Buenos Aires).
 
-Servidor MCP + orchestrator + webhook de WhatsApp. **Independiente de
+Servidor MCP + orchestrator + webhooks (WhatsApp y Telegram) + dashboard de
+KPIs, todo en un solo servicio/proceso. **Independiente de
 [`st-clares-app`](https://github.com/silagana/st-clares-app)** (el panel
 Streamlit original): tiene su propia base Postgres y su propio esquema. El
 esquema y los services (`enrollment.py`, `reconciliation.py`, `bank_import.py`)
@@ -36,9 +37,9 @@ app/
     audit.py             # copiado de st-clares-app
     formatters.py         # copiado de st-clares-app
   mcp_server.py          # servidor MCP: 21 tools (alumnos, cuotas, conciliación, referencia, dashboard)
-  dashboard.py            # KPIs + página HTML del dashboard (/reportes/<token>), montada en whatsapp_webhook
-  whatsapp_webhook.py     # canal principal: recibe mensajes de WhatsApp Cloud API, monta dashboard.py
-  telegram_webhook.py     # canal de prueba alternativo (ver sección Deploy) — separado a propósito
+  dashboard.py            # KPIs + página HTML del dashboard (/reportes/<token>)
+  whatsapp_webhook.py     # entrypoint del proceso: monta dashboard.py y telegram_webhook.py, expone /webhook (WhatsApp)
+  telegram_webhook.py     # router del canal de prueba de Telegram (/telegram/webhook), montado en whatsapp_webhook.py
   orchestrator.py         # arma el prompt, llama a Claude con las tools MCP
 migrations/
   versions/              # migraciones de Alembic
@@ -57,32 +58,35 @@ docs/
 - `DATABASE_URL` — Postgres propia de MCP-erp
 - `ANTHROPIC_API_KEY`
 - `WHATSAPP_TOKEN`, `WHATSAPP_PHONE_NUMBER_ID`, `WHATSAPP_VERIFY_TOKEN` — canal principal
-- `TELEGRAM_BOT_TOKEN` — solo si se usa el canal de prueba de Telegram
-- `PUBLIC_BASE_URL` — URL pública del servicio de WhatsApp, sin barra final (para armar los links de `/reportes/<token>`)
+- `TELEGRAM_BOT_TOKEN` — solo si se usa el canal de prueba de Telegram (mismo servicio, misma variable list)
+- `PUBLIC_BASE_URL` — URL pública del servicio, sin barra final (para armar los links de `/reportes/<token>`)
 - `SOURCE_DATABASE_URL` — solo para la migración única (`scripts/migrate_from_st_clares.py`)
 
 ## Deploy
 
-Railway. Cuatro servicios en el mismo proyecto:
+Railway. **Importante: un solo servicio de aplicación** (`MCP-erp`) además
+de Postgres — WhatsApp, Telegram y el dashboard corren todos en el mismo
+proceso/deploy. **No crear un segundo servicio para Telegram** — es un
+error fácil de cometer (pasó una vez) que además deja el `Custom Start
+Command` del servicio principal apuntando a `telegram_webhook` en vez de
+`whatsapp_webhook`, cortando WhatsApp sin querer.
 
 1. **Postgres** — propia, separada de la de `st-clares-app`.
-2. **MCP-erp** (canal WhatsApp) — `startCommand` en `railway.toml`:
-   `uvicorn app.whatsapp_webhook:app --host 0.0.0.0 --port $PORT`.
-3. **MCP-erp-telegram** (canal de prueba, opcional) — mismo repo, pero con
-   un **Custom Start Command propio** seteado a mano en Railway (Settings →
-   Deploy → Start Command, sobreescribe el de `railway.toml` para ese
-   servicio):
-   `uvicorn app.telegram_webhook:app --host 0.0.0.0 --port $PORT`.
-   Necesita su propia variable `TELEGRAM_BOT_TOKEN` (se crea gratis con
-   [@BotFather](https://t.me/BotFather) en Telegram). Una vez desplegado,
-   registrar el webhook con:
+2. **MCP-erp** (único servicio de app) — `startCommand` en `railway.toml`,
+   **no lo toques**: `uvicorn app.whatsapp_webhook:app --host 0.0.0.0 --port $PORT`.
+   Variables acá: `DATABASE_URL`, `ANTHROPIC_API_KEY`, `WHATSAPP_TOKEN`,
+   `WHATSAPP_PHONE_NUMBER_ID`, `WHATSAPP_VERIFY_TOKEN`, `TELEGRAM_BOT_TOKEN`,
+   `PUBLIC_BASE_URL` — todas juntas en este mismo servicio.
+
+   **Activar Telegram**: crear el bot con [@BotFather](https://t.me/BotFather),
+   cargar `TELEGRAM_BOT_TOKEN`, y registrar el webhook (apuntando al mismo
+   dominio de este servicio):
    ```
-   curl "https://api.telegram.org/bot<TOKEN>/setWebhook?url=https://<dominio-de-ese-servicio>/telegram/webhook"
+   curl "https://api.telegram.org/bot<TOKEN>/setWebhook?url=https://<dominio-de-MCP-erp>/telegram/webhook"
    ```
-   **Para desactivarlo**: parar o eliminar este servicio en Railway. No
-   afecta al servicio de WhatsApp ni a la base — comparten la misma
-   Postgres y el mismo código, pero corren como procesos independientes.
-4. **MCP-erp-resumen-semanal** (cron, opcional) — mismo repo, pero como
+   **Desactivar Telegram**: `curl "https://api.telegram.org/bot<TOKEN>/deleteWebhook"`
+   — un solo comando, no hace falta tocar Railway ni el código.
+3. **MCP-erp-resumen-semanal** (cron, opcional) — mismo repo, pero como
    tipo de servicio **"Cron Job"** en vez de un servidor web:
    - **Cron Schedule**: ej. `0 12 * * 1` (lunes 12:00 UTC = 9:00 hora
      Argentina).
