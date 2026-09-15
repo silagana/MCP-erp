@@ -196,4 +196,6 @@ Organizado por si ya existe la lógica de base (se envuelve) o hay que crearla.
 | 12 | `whatsapp_text.py` (recordatorios, avisos de mora, factura mensual): confirmar tarifa de WhatsApp para Argentina post 1/10/2026 y activar | en pausa (ver sección 7) |
 | 13 | AFIP (cuando esté definida la condición fiscal del instituto) | futuro |
 
-**Próximo paso inmediato:** conseguir un número de WhatsApp Business real para producción (el de prueba/sandbox ya validó todo el circuito). En paralelo, etapa 6 (completar `cash_payments.py`) sigue pendiente — no bloquea.
+**Decisión (2026-09-15):** el número real del instituto se usa a diario desde WhatsApp Business App (probablemente secretaría). Migrarlo a Cloud API significa que ese teléfono deja de poder usarlo desde la app — todo pasa a manejarse por el bot. Se decidió **esperar** a migrarlo hasta que el bot cubra más flujos (al menos `cash_payments.py`, etapa 6) — mientras tanto se sigue probando con el número de sandbox.
+
+**Próximo paso inmediato:** etapa 6 — completar `services/cash_payments.py` y exponerlo como tool (`registrar_pago_efectivo`). Migrar el número real queda pendiente hasta que el bot esté más completo.
