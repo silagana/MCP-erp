@@ -16,11 +16,13 @@ archivos adjuntos de WhatsApp), marcar_asistencia/consultar_horarios
 (necesitan tablas nuevas que no existen todavía), y toda la comunicación
 saliente de whatsapp_text.py (en pausa, ver sección 7).
 """
+import os
 from datetime import date
 from decimal import Decimal
 
 from mcp.server.mcpserver import MCPServer
 
+from app.dashboard import crear_token_reporte
 from app.db import SessionLocal
 from app.models import (
     Alumno, Curso, EstadoCuotaEnum, Inscripcion, Profesor, RolWhatsappEnum, Sede,
@@ -32,6 +34,25 @@ from app.permissions import AccesoDenegado
 from app.services import enrollment, reconciliation
 
 server = MCPServer("st-clares-erp")
+
+PUBLIC_BASE_URL = os.environ.get("PUBLIC_BASE_URL", "").rstrip("/")
+
+
+@server.tool()
+def generar_dashboard(telefono: str) -> dict:
+    """Genera un link a un dashboard con gráficos (KPIs de alumnos, ingresos
+    y morosidad para administrativo/owner; resumen de la propia cuenta para
+    un alumno). El link vence en 24hs y respeta el rol de quien lo pidió —
+    no requiere ningún parámetro más. Cualquier usuario registrado puede pedirlo."""
+    with SessionLocal() as session:
+        usuario = resolver_usuario(session, telefono)
+        if usuario is None:
+            raise AccesoDenegado(f"El número {telefono} no está registrado.")
+        token = crear_token_reporte(session, usuario)
+        session.commit()
+        if not PUBLIC_BASE_URL:
+            return {"error": "Falta configurar PUBLIC_BASE_URL en el servidor."}
+        return {"url": f"{PUBLIC_BASE_URL}/reportes/{token}", "valido_por_horas": 24}
 
 
 @server.tool()

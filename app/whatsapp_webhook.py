@@ -14,9 +14,11 @@ import os
 import httpx
 from fastapi import BackgroundTasks, FastAPI, Request
 
+from app.dashboard import router as dashboard_router
 from app.orchestrator import procesar_mensaje
 
 app = FastAPI()
+app.include_router(dashboard_router)
 
 VERIFY_TOKEN = os.environ.get("WHATSAPP_VERIFY_TOKEN", "")
 WHATSAPP_TOKEN = os.environ.get("WHATSAPP_TOKEN", "")

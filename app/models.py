@@ -71,6 +71,10 @@ class RolWhatsappEnum(str, enum.Enum):
     administrativo = "administrativo"
     owner = "owner"
 
+class AlcanceReporteEnum(str, enum.Enum):
+    completo = "completo"
+    alumno = "alumno"
+
 class RolMensajeEnum(str, enum.Enum):
     user = "user"
     assistant = "assistant"
@@ -322,3 +326,22 @@ class MensajeWhatsapp(Base):
     rol = Column(Enum(RolMensajeEnum), nullable=False)
     contenido = Column(Text, nullable=False)
     timestamp = Column(DateTime, nullable=False, default=datetime.utcnow)
+
+
+class ReporteToken(Base):
+    """Cada link de dashboard (ver app/dashboard.py) es un token random con
+    vencimiento que graba el alcance (rol) que tenía el que lo pidió EN ESE
+    MOMENTO — el link respeta permisos aunque se reenvíe, no es "quien tenga
+    el link ve todo"."""
+    __tablename__ = "reporte_token"
+
+    id = Column(Integer, primary_key=True)
+    token = Column(String(64), nullable=False, unique=True, index=True)
+    usuario_whatsapp_id = Column(Integer, ForeignKey("usuario_whatsapp.id"), nullable=False)
+    alcance = Column(Enum(AlcanceReporteEnum), nullable=False)
+    alumno_id = Column(Integer, ForeignKey("alumno.id"))  # solo si alcance == alumno
+    creado = Column(DateTime, nullable=False, default=datetime.utcnow)
+    expira = Column(DateTime, nullable=False)
+
+    usuario = relationship("UsuarioWhatsapp")
+    alumno = relationship("Alumno")

@@ -35,8 +35,9 @@ app/
   utils/
     audit.py             # copiado de st-clares-app
     formatters.py         # copiado de st-clares-app
-  mcp_server.py          # servidor MCP: 20 tools (alumnos, cuotas, conciliación, referencia)
-  whatsapp_webhook.py     # canal principal: recibe mensajes de WhatsApp Cloud API
+  mcp_server.py          # servidor MCP: 21 tools (alumnos, cuotas, conciliación, referencia, dashboard)
+  dashboard.py            # KPIs + página HTML del dashboard (/reportes/<token>), montada en whatsapp_webhook
+  whatsapp_webhook.py     # canal principal: recibe mensajes de WhatsApp Cloud API, monta dashboard.py
   telegram_webhook.py     # canal de prueba alternativo (ver sección Deploy) — separado a propósito
   orchestrator.py         # arma el prompt, llama a Claude con las tools MCP
 migrations/
@@ -45,8 +46,10 @@ scripts/
   migrate_from_st_clares.py     # migración única de datos desde la Postgres de st-clares-app
   normalizar_telefonos.py       # normaliza teléfonos migrados al formato WhatsApp (549 + 10 dígitos)
   seed_usuario_whatsapp.py      # carga (idempotente) de números autorizados
+  enviar_resumen_semanal.py     # cron semanal: manda KPIs por Telegram (ver Deploy) — no por WhatsApp todavía
 docs/
   ARCHITECTURE.md       # diseño completo: esquema, roles, tools, plan
+  BRAND.md               # identidad visual de St. Clare's (colores/tipografía reales del sitio)
 ```
 
 ## Variables de entorno (`.env`, no versionado)
@@ -55,11 +58,12 @@ docs/
 - `ANTHROPIC_API_KEY`
 - `WHATSAPP_TOKEN`, `WHATSAPP_PHONE_NUMBER_ID`, `WHATSAPP_VERIFY_TOKEN` — canal principal
 - `TELEGRAM_BOT_TOKEN` — solo si se usa el canal de prueba de Telegram
+- `PUBLIC_BASE_URL` — URL pública del servicio de WhatsApp, sin barra final (para armar los links de `/reportes/<token>`)
 - `SOURCE_DATABASE_URL` — solo para la migración única (`scripts/migrate_from_st_clares.py`)
 
 ## Deploy
 
-Railway. Tres servicios en el mismo proyecto:
+Railway. Cuatro servicios en el mismo proyecto:
 
 1. **Postgres** — propia, separada de la de `st-clares-app`.
 2. **MCP-erp** (canal WhatsApp) — `startCommand` en `railway.toml`:
@@ -78,3 +82,14 @@ Railway. Tres servicios en el mismo proyecto:
    **Para desactivarlo**: parar o eliminar este servicio en Railway. No
    afecta al servicio de WhatsApp ni a la base — comparten la misma
    Postgres y el mismo código, pero corren como procesos independientes.
+4. **MCP-erp-resumen-semanal** (cron, opcional) — mismo repo, pero como
+   tipo de servicio **"Cron Job"** en vez de un servidor web:
+   - **Cron Schedule**: ej. `0 12 * * 1` (lunes 12:00 UTC = 9:00 hora
+     Argentina).
+   - **Start Command**: `python scripts/enviar_resumen_semanal.py`.
+   - Variables: `DATABASE_URL`, `TELEGRAM_BOT_TOKEN`, `PUBLIC_BASE_URL`
+     (las mismas que los otros servicios).
+   - Manda el resumen **solo por Telegram** a los usuarios con rol
+     owner/administrativo que ya vincularon `telegram_chat_id` (con
+     `/vincular` en el bot) — deliberadamente no manda por WhatsApp
+     todavía, ver el docstring del script.
