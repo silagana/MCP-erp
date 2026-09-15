@@ -282,7 +282,7 @@ def _render_completo(datos_alumnos: dict, datos_ingresos: dict, datos_morosidad:
 <title>Dashboard — St. Clare's</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Raleway:wght@800&family=Open+Sans:wght@400;600&display=swap" rel="stylesheet">
-<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.4/chart.umd.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.5.1/chart.umd.min.js"></script>
 <style>{_ESTILOS}</style>
 </head>
 <body>
