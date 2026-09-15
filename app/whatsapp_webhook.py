@@ -18,7 +18,15 @@ from app.dashboard import router as dashboard_router
 from app.orchestrator import procesar_mensaje
 
 app = FastAPI()
-app.include_router(dashboard_router)
+# app.include_router(dashboard_router) tiene un bug de cacheo en la versión
+# de FastAPI de este entorno (0.141.1): el router incluido queda envuelto en
+# un _IncludedRouter cuyo effective_candidates nunca se recalcula, y la ruta
+# nunca matchea un request real aunque esté bien definida (confirmado:
+# dashboard_router.routes la tiene). Workaround: agregar los APIRoute del
+# router directo a app.router.routes, igual que quedan las rutas @app.get
+# de este mismo archivo — se confirmó que esas sí funcionan.
+for _route in dashboard_router.routes:
+    app.router.routes.append(_route)
 
 VERIFY_TOKEN = os.environ.get("WHATSAPP_VERIFY_TOKEN", "")
 WHATSAPP_TOKEN = os.environ.get("WHATSAPP_TOKEN", "")
