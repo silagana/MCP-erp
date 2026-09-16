@@ -17,10 +17,12 @@ archivos adjuntos de WhatsApp), marcar_asistencia/consultar_horarios
 saliente de whatsapp_text.py (en pausa, ver sección 7).
 """
 import os
+import re
 from datetime import date
 from decimal import Decimal
 
 from mcp.server.mcpserver import MCPServer
+from sqlalchemy import or_
 
 from app.dashboard import crear_token_reporte
 from app.db import SessionLocal
@@ -36,6 +38,15 @@ from app.services import enrollment, reconciliation
 server = MCPServer("st-clares-erp")
 
 PUBLIC_BASE_URL = os.environ.get("PUBLIC_BASE_URL", "").rstrip("/")
+
+
+def _limpiar_dni(dni: str) -> str:
+    """Saca puntos/espacios/guiones — encontramos un caso real donde el
+    modelo mandó '40.000.000' y quedó guardado con puntos, distinto al
+    formato limpio (solo dígitos) que usa el resto de la base (venía de la
+    migración del Excel) — eso rompía cualquier búsqueda posterior por
+    DNI exacto."""
+    return re.sub(r"\D", "", dni)
 
 
 @server.tool()
@@ -101,13 +112,16 @@ def buscar_alumno(telefono: str, query: str) -> dict:
     with SessionLocal() as session:
         require_rol(session, telefono, {RolWhatsappEnum.administrativo})
         patron = f"%{query.strip()}%"
+        filtros = [Alumno.nombre.ilike(patron), Alumno.apellido.ilike(patron), Alumno.dni.ilike(patron)]
+        # si la búsqueda tiene puntos/espacios (ej. "40.000.000"), matchear
+        # también contra el DNI sin esos caracteres — el formato guardado
+        # es solo dígitos, ver _limpiar_dni.
+        query_digitos = _limpiar_dni(query)
+        if query_digitos and query_digitos != query.strip():
+            filtros.append(Alumno.dni.ilike(f"%{query_digitos}%"))
         alumnos = (
             session.query(Alumno)
-            .filter(
-                (Alumno.nombre.ilike(patron))
-                | (Alumno.apellido.ilike(patron))
-                | (Alumno.dni.ilike(patron))
-            )
+            .filter(or_(*filtros))
             .limit(15)
             .all()
         )
@@ -142,7 +156,7 @@ def registrar_alumno(
         alumno = Alumno(
             nombre=nombre,
             apellido=apellido,
-            dni=dni,
+            dni=_limpiar_dni(dni) if dni else None,
             sede_id=sede_id,
             fecha_nacimiento=date.fromisoformat(fecha_nacimiento) if fecha_nacimiento else None,
             telefono=telefono_alumno,
