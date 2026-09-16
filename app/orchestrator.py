@@ -44,6 +44,11 @@ MODEL = "qwen/qwen3.8-27b"
 BASE_URL = "https://api.groq.com/openai/v1"
 MAX_HISTORIAL = 20
 MAX_TOOL_ITERATIONS = 6
+# El tier gratuito/on-demand de Groq limita a 1000 tokens de SALIDA por
+# minuto (OTPM) — pedir max_tokens=1024 supera ese límite en un solo
+# request y Groq lo rechaza con 429 siempre, no importa cuánto tráfico
+# haya. Tiene que quedar estrictamente por debajo de 1000.
+MAX_TOKENS_RESPUESTA = 800
 
 client = AsyncOpenAI(api_key=os.environ["GROQ_API_KEY"], base_url=BASE_URL)
 
@@ -132,7 +137,7 @@ async def procesar_mensaje(telefono: str, texto: str) -> str:
     for _ in range(MAX_TOOL_ITERATIONS):
         respuesta = await client.chat.completions.create(
             model=MODEL,
-            max_tokens=1024,
+            max_tokens=MAX_TOKENS_RESPUESTA,
             tools=tools,
             messages=mensajes,
         )
