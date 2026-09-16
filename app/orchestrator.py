@@ -154,6 +154,12 @@ async def procesar_mensaje(telefono: str, texto: str) -> str:
         respuesta = await client.chat.completions.create(
             model=MODEL,
             max_completion_tokens=MAX_TOKENS_RESPUESTA,
+            # gpt-5.6-luna es un modelo "reasoning" — con reasoning_effort
+            # activado (el default) no soporta function/tool calling en
+            # /v1/chat/completions ("Function tools with reasoning_effort
+            # are not supported"). Lo desactivamos para poder seguir usando
+            # tools con esta misma forma de llamar a la API.
+            reasoning_effort="none",
             tools=tools,
             messages=mensajes,
         )
