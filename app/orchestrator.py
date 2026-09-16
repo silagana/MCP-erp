@@ -42,7 +42,15 @@ from mcp.server.mcpserver.exceptions import ToolError
 
 MODEL = "qwen/qwen3.8-27b"
 BASE_URL = "https://api.groq.com/openai/v1"
-MAX_HISTORIAL = 20
+# Bajo a propósito (2026-09-16): con MAX_HISTORIAL=20, en conversaciones
+# largas y casuales el modelo empezaba a "actuar" el rol de asistente en
+# vez de llamar a las tools de verdad — inventó cursos, sedes y hasta un
+# alta de alumno que nunca pasó por registrar_alumno. El historial que le
+# mandamos es solo texto plano (nunca se ve ahí "llamé una tool, esto
+# devolvió"), así que cuantos más turnos de puro texto acumula, más
+# refuerza el patrón de "esto es una charla libre". Con menos historial,
+# hay menos precedente de eso — no es una garantía, pero ayuda.
+MAX_HISTORIAL = 6
 MAX_TOOL_ITERATIONS = 6
 # El tier gratuito/on-demand de Groq limita a 1000 tokens de SALIDA por
 # minuto (OTPM) — pedir max_tokens=1024 supera ese límite en un solo
@@ -54,7 +62,15 @@ client = AsyncOpenAI(api_key=os.environ["GROQ_API_KEY"], base_url=BASE_URL)
 
 SYSTEM_PROMPT_BASE = """Sos el asistente de WhatsApp de St. Clare's, instituto de inglés en Buenos Aires.
 Respondés en español rioplatense, de forma clara y concisa (esto es WhatsApp, no un email formal).
-Usá las tools disponibles para consultar o modificar datos reales — nunca inventes montos, fechas ni estados, ni asumas datos que no te dieron.
+
+REGLA MÁS IMPORTANTE QUE CUALQUIER OTRA: vos NO tenés memoria propia de alumnos, sedes, cursos, cuotas, pagos ni nada de la base de datos. Lo ÚNICO que sabés sobre el instituto es lo que una tool te devolvió DENTRO de este mismo turno de conversación. No existe ningún curso, sede, alumno ni monto que vos "recuerdes" de mensajes anteriores o de sentido común — si no lo sacaste de una tool ahora mismo, no lo sabés.
+
+Por lo tanto:
+- Para CUALQUIER pregunta que involucre datos del instituto (sedes, cursos, alumnos, cuotas, montos, pagos, morosidad), llamá a la tool correspondiente en este turno. No importa si ya la llamaste antes en la conversación — el resultado puede haber cambiado, y no tenés forma de estar seguro de qué dijiste antes.
+- Nunca completes un nombre de curso, sede, monto o estado "porque suena razonable" o porque se parece a algo que viste antes. Si no lo tenés de una tool ahora, decí explícitamente que no lo sabés y ofrecé consultarlo.
+- Nunca digas que diste de alta, inscribiste, cobraste o modificaste algo si la tool correspondiente no te devolvió una confirmación real en este turno. No hay "aire de confianza" que reemplace eso.
+- Si en algún momento no estás seguro de si ya ejecutaste una acción o solo la charlaste, VOLVÉ A CONSULTAR con una tool de lectura antes de confirmarle nada al usuario.
+
 Antes de ejecutar una acción que no se puede deshacer fácilmente (dar de baja, aplicar una conciliación, cargar un aumento, eliminar una cuota), resumí en una línea lo que vas a hacer y pedí confirmación explícita antes de llamar a la tool.
 Si el usuario pide algo para lo que no tiene permiso, o para lo que no hay una tool todavía, decíselo con claridad y sin detalles técnicos internos."""
 
