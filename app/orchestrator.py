@@ -1,15 +1,22 @@
-"""Arma el contexto de conversación, llama al modelo (Qwen3 vía Groq, API
-compatible con OpenAI) con las tools del servidor MCP (app/mcp_server.py),
-y devuelve el texto de respuesta para mandar por WhatsApp/Telegram.
+"""Arma el contexto de conversación, llama al modelo (OpenAI) con las tools
+del servidor MCP (app/mcp_server.py), y devuelve el texto de respuesta
+para mandar por WhatsApp/Telegram.
 
-Cambio de proveedor (2026-09-16): estaba en Claude Haiku directo contra la
-API de Anthropic, pero la cuenta quedó en revisión ("organization on hold")
-sin ETA. Se migró a Groq (mismo SDK `openai`, apuntando a
-https://api.groq.com/openai/v1) con `qwen/qwen3.8-27b` — modelo open-source
-(Apache 2.0), tool-calling probado para workflows agénticos, sin el trámite
-de alta que trabó a Anthropic. El diseño quedó desacoplado del proveedor:
-como Groq es compatible con el formato de OpenAI, volver a Claude (vía
-Anthropic directo, o Bedrock/Vertex) o probar otro modelo es cambiar
+Historial de proveedor:
+- Al principio: Claude Haiku directo contra la API de Anthropic. La cuenta
+  quedó en revisión ("organization on hold") sin ETA (2026-09-16).
+- Se migró a Groq con `qwen/qwen3.8-27b` (mismo SDK `openai`, apuntando a
+  https://api.groq.com/openai/v1) — barato y sin trámite de alta, pero en
+  conversaciones largas empezó a inventar datos en vez de llamar a las
+  tools (confirmado con un caso real: inventó sedes, cursos, y hasta un
+  alta de alumno que nunca pasó por registrar_alumno). Un modelo de este
+  tamaño no da la confiabilidad necesaria para un ERP real.
+- Se migró a OpenAI directo (2026-09-16, mismo día) con `gpt-5.6-luna` —
+  más confiable en tool-calling sostenido.
+
+El diseño quedó desacoplado del proveedor desde el cambio a Groq: como
+todos estos son compatibles con el formato de OpenAI, cambiar de nuevo
+(Anthropic directo, Bedrock/Vertex, otro modelo de OpenAI) es tocar
 MODEL/BASE_URL/API_KEY acá, no reescribir el loop.
 
 Flujo por mensaje entrante (procesar_mensaje):
@@ -40,25 +47,18 @@ from app.models import MensajeWhatsapp, RolMensajeEnum
 from app.permissions import resolver_usuario
 from mcp.server.mcpserver.exceptions import ToolError
 
-MODEL = "qwen/qwen3.8-27b"
-BASE_URL = "https://api.groq.com/openai/v1"
-# Bajo a propósito (2026-09-16): con MAX_HISTORIAL=20, en conversaciones
-# largas y casuales el modelo empezaba a "actuar" el rol de asistente en
-# vez de llamar a las tools de verdad — inventó cursos, sedes y hasta un
-# alta de alumno que nunca pasó por registrar_alumno. El historial que le
-# mandamos es solo texto plano (nunca se ve ahí "llamé una tool, esto
-# devolvió"), así que cuantos más turnos de puro texto acumula, más
-# refuerza el patrón de "esto es una charla libre". Con menos historial,
-# hay menos precedente de eso — no es una garantía, pero ayuda.
-MAX_HISTORIAL = 6
+MODEL = "gpt-5.6-luna"
+# Historial acotado a propósito: con Groq/Qwen3 (modelo mucho más chico)
+# un historial largo de puro texto plano (sin mostrar nunca "llamé una
+# tool, esto devolvió") hacía que el modelo terminara "actuando" el rol
+# de asistente en vez de llamar a las tools de verdad. Con OpenAI debería
+# hacer falta menos de esta cautela, pero se mantiene moderado igual —
+# no cuesta nada y es una buena práctica defensiva de todos modos.
+MAX_HISTORIAL = 12
 MAX_TOOL_ITERATIONS = 6
-# El tier gratuito/on-demand de Groq limita a 1000 tokens de SALIDA por
-# minuto (OTPM) — pedir max_tokens=1024 supera ese límite en un solo
-# request y Groq lo rechaza con 429 siempre, no importa cuánto tráfico
-# haya. Tiene que quedar estrictamente por debajo de 1000.
-MAX_TOKENS_RESPUESTA = 800
+MAX_TOKENS_RESPUESTA = 1024
 
-client = AsyncOpenAI(api_key=os.environ["GROQ_API_KEY"], base_url=BASE_URL)
+client = AsyncOpenAI(api_key=os.environ["OPENAI_API_KEY"])
 
 SYSTEM_PROMPT_BASE = """Sos el asistente de WhatsApp de St. Clare's, instituto de inglés en Buenos Aires.
 Respondés en español rioplatense, de forma clara y concisa (esto es WhatsApp, no un email formal).
