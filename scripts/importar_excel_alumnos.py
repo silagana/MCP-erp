@@ -67,6 +67,7 @@ COL_MATRICULA = 13
 COL_DER_EX = 35
 
 SEDES_CONOCIDAS = {"caballito": "Caballito", "boedo": "Boedo", "on line": "Online", "online": "Online"}
+MOTIVO_BAJA_IMPORT = "Baja detectada en import de Excel (columna marcada con x)"
 
 
 def _limpiar_texto(v) -> str | None:
@@ -81,6 +82,38 @@ def _limpiar_texto(v) -> str | None:
 
 def _es_x(v) -> bool:
     return isinstance(v, str) and v.strip().lower() == "x"
+
+
+def _detectar_periodo_baja(valores_por_mes: list[tuple[str, object]]) -> str | None:
+    """`valores_por_mes` es [(periodo, valor_celda_monto), ...] en orden
+    cronológico. Devuelve el primer período de la RACHA DE 'x' QUE LLEGA
+    HASTA EL FINAL de los datos cargados, o None si no hay baja.
+
+    No alcanza con "aparece una x en algún lado" — muchos alumnos tienen
+    'x' en los primeros meses porque todavía no estaban inscriptos (se dieron
+    de alta más tarde en el año), no porque se dieron de baja. Solo cuenta
+    como baja si la 'x' se sostiene hasta el último mes con datos (real o
+    'x') — un pago real después de una 'x' significa que no fue baja, solo
+    un mes sin cuota generada."""
+    ultimo_idx_significativo = None
+    for i, (_, v) in enumerate(valores_por_mes):
+        if _es_x(v) or (isinstance(v, (int, float)) and v > 0):
+            ultimo_idx_significativo = i
+
+    if ultimo_idx_significativo is None:
+        return None  # no hay ningún dato cargado todavía
+
+    if not _es_x(valores_por_mes[ultimo_idx_significativo][1]):
+        return None  # el último dato es un pago real -> sigue activo
+
+    inicio_baja = valores_por_mes[ultimo_idx_significativo][0]
+    for i in range(ultimo_idx_significativo, -1, -1):
+        periodo_i, valor_i = valores_por_mes[i]
+        if _es_x(valor_i):
+            inicio_baja = periodo_i
+        else:
+            break
+    return inicio_baja
 
 
 # Nombres de pila comunes que, cuando aparecen ANTES de la última palabra,
@@ -244,12 +277,9 @@ def importar(xlsx_path: str, database_url: str, dry_run: bool) -> None:
                         es_default=(col_cuit == 5),
                     ))
 
-            # detectar mes de baja (primer 'x')
-            periodo_baja = None
-            for periodo, col_monto, _ in MESES:
-                if _es_x(ws.cell(row=fila, column=col_monto).value):
-                    periodo_baja = periodo
-                    break
+            # detectar mes de baja (racha de 'x' que llega hasta el final)
+            valores_meses = [(periodo, ws.cell(row=fila, column=col_monto).value) for periodo, col_monto, _ in MESES]
+            periodo_baja = _detectar_periodo_baja(valores_meses)
 
             monto_ref_curso = None
             for _, col_monto, _ in MESES:
@@ -281,7 +311,19 @@ def importar(xlsx_path: str, database_url: str, dry_run: bool) -> None:
                 alumno.estado = EstadoAlumnoEnum.baja
                 anio, mes = periodo_baja.split("-")
                 alumno.fecha_estado = date(int(anio), int(mes), 1)
-                alumno.motivo_estado = "Baja detectada en import de Excel (columna marcada con x)"
+                alumno.motivo_estado = MOTIVO_BAJA_IMPORT
+            elif (
+                periodo_baja is None
+                and alumno.estado == EstadoAlumnoEnum.baja
+                and alumno.motivo_estado == MOTIVO_BAJA_IMPORT
+            ):
+                # re-corrida con la detección de baja arreglada (2026-09-16):
+                # este alumno había quedado marcado de baja por error (la
+                # detección vieja tomaba cualquier 'x' como corte definitivo,
+                # aunque después hubiera pagos reales) — se revierte.
+                alumno.estado = EstadoAlumnoEnum.activo
+                alumno.fecha_estado = None
+                alumno.motivo_estado = None
 
             session.flush()  # asegura alumno.id/inscripcion.id para lo que sigue
 
