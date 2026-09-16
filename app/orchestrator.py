@@ -153,7 +153,7 @@ async def procesar_mensaje(telefono: str, texto: str) -> str:
     for _ in range(MAX_TOOL_ITERATIONS):
         respuesta = await client.chat.completions.create(
             model=MODEL,
-            max_tokens=MAX_TOKENS_RESPUESTA,
+            max_completion_tokens=MAX_TOKENS_RESPUESTA,
             tools=tools,
             messages=mensajes,
         )
