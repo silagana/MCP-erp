@@ -83,15 +83,31 @@ def _es_x(v) -> bool:
     return isinstance(v, str) and v.strip().lower() == "x"
 
 
+# Nombres de pila comunes que, cuando aparecen ANTES de la última palabra,
+# casi siempre son la primera mitad de un nombre compuesto (ej. "Gentile
+# Maria Giuliana" -> apellido "Gentile", nombre "Maria Giuliana") y no parte
+# de un apellido compuesto. Encontrado revisando a mano los 54 casos de
+# 3+ palabras del padrón real — no es exhaustivo, sigue siendo una
+# heurística, no una regla.
+_NOMBRES_COMPUESTOS_COMUNES = {
+    "maria", "jose", "juan", "ana", "luis", "carlos", "martin", "lautaro",
+}
+
+
 def _parsear_nombre(nombre_completo: str) -> tuple[str, str]:
-    """'Apellido[ Apellido2] Nombre' -> (apellido, nombre). Asume que la
-    ÚLTIMA palabra es el nombre de pila — heurística razonable para
-    apellidos compuestos, pero no perfecta (nombres de pila compuestos
-    como "Maria Jose" al final se parsean mal). Los casos de 3+ palabras
-    se listan aparte al final del import para revisión manual."""
+    """'Apellido[ Apellido2] Nombre[ Nombre2]' -> (apellido, nombre). Asume
+    que la ÚLTIMA palabra es el nombre de pila, salvo que la anteúltima sea
+    un nombre de pila común (ver _NOMBRES_COMPUESTOS_COMUNES) — ahí toma
+    las últimas DOS palabras como nombre compuesto. Heurística razonable
+    para apellidos compuestos, pero no perfecta. Los casos de 3+ palabras
+    se listan aparte al final del import para revisión manual igual."""
     partes = nombre_completo.split()
     if len(partes) == 1:
         return partes[0], ""
+    if len(partes) >= 3:
+        anteultima = unicodedata.normalize("NFKD", partes[-2]).encode("ascii", "ignore").decode("ascii").lower()
+        if anteultima in _NOMBRES_COMPUESTOS_COMUNES:
+            return " ".join(partes[:-2]), " ".join(partes[-2:])
     return " ".join(partes[:-1]), partes[-1]
 
 
