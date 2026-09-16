@@ -1,15 +1,25 @@
-"""Arma el contexto de conversación, llama a Claude (claude-haiku-4-5) con las
-tools del servidor MCP (app/mcp_server.py), y devuelve el texto de respuesta
-para mandar por WhatsApp.
+"""Arma el contexto de conversación, llama al modelo (Qwen3 vía Groq, API
+compatible con OpenAI) con las tools del servidor MCP (app/mcp_server.py),
+y devuelve el texto de respuesta para mandar por WhatsApp/Telegram.
+
+Cambio de proveedor (2026-09-16): estaba en Claude Haiku directo contra la
+API de Anthropic, pero la cuenta quedó en revisión ("organization on hold")
+sin ETA. Se migró a Groq (mismo SDK `openai`, apuntando a
+https://api.groq.com/openai/v1) con `qwen/qwen3.8-27b` — modelo open-source
+(Apache 2.0), tool-calling probado para workflows agénticos, sin el trámite
+de alta que trabó a Anthropic. El diseño quedó desacoplado del proveedor:
+como Groq es compatible con el formato de OpenAI, volver a Claude (vía
+Anthropic directo, o Bedrock/Vertex) o probar otro modelo es cambiar
+MODEL/BASE_URL/API_KEY acá, no reescribir el loop.
 
 Flujo por mensaje entrante (procesar_mensaje):
 1. Resuelve el rol del teléfono. Si no está registrado, responde sin llamar
-   a Claude (ahorra costo y evita confundir a alguien sin acceso).
+   al modelo (ahorra costo y evita confundir a alguien sin acceso).
 2. Carga las últimas MAX_HISTORIAL líneas de conversación con ese teléfono.
-3. Llama a Claude con las tools del MCP (sin el parámetro `telefono` — eso
+3. Llama al modelo con las tools del MCP (sin el parámetro `telefono` — eso
    se inyecta acá con el número real de quien escribió, nunca lo elige el
    modelo, para que no se pueda pedir una acción "en nombre de" otro número).
-4. Si Claude pide usar una tool, la ejecuta contra app/mcp_server.py y le
+4. Si el modelo pide usar una tool, la ejecuta contra app/mcp_server.py y le
    devuelve el resultado, hasta MAX_TOOL_ITERATIONS pasos o hasta que
    responda con texto final.
 5. Guarda el turno (mensaje del usuario + respuesta final) en el historial.
@@ -19,10 +29,10 @@ de funciones async — bloquean el loop brevemente. Para el volumen de un
 instituto chico no es un problema; si hace falta más concurrencia más
 adelante, pasar a un engine async.
 """
-import asyncio
+import json
 import os
 
-from anthropic import AsyncAnthropic
+from openai import AsyncOpenAI
 
 from app.db import SessionLocal
 from app.mcp_server import server
@@ -30,11 +40,12 @@ from app.models import MensajeWhatsapp, RolMensajeEnum
 from app.permissions import resolver_usuario
 from mcp.server.mcpserver.exceptions import ToolError
 
-MODEL = "claude-haiku-4-5"
+MODEL = "qwen/qwen3.8-27b"
+BASE_URL = "https://api.groq.com/openai/v1"
 MAX_HISTORIAL = 20
 MAX_TOOL_ITERATIONS = 6
 
-client = AsyncAnthropic(api_key=os.environ["ANTHROPIC_API_KEY"])
+client = AsyncOpenAI(api_key=os.environ["GROQ_API_KEY"], base_url=BASE_URL)
 
 SYSTEM_PROMPT_BASE = """Sos el asistente de WhatsApp de St. Clare's, instituto de inglés en Buenos Aires.
 Respondés en español rioplatense, de forma clara y concisa (esto es WhatsApp, no un email formal).
@@ -43,23 +54,27 @@ Antes de ejecutar una acción que no se puede deshacer fácilmente (dar de baja,
 Si el usuario pide algo para lo que no tiene permiso, o para lo que no hay una tool todavía, decíselo con claridad y sin detalles técnicos internos."""
 
 
-async def _tools_para_claude() -> list[dict]:
-    """Tools del servidor MCP en formato Anthropic, sin el parámetro `telefono`
-    (se inyecta en _ejecutar_tool, nunca lo decide el modelo)."""
+async def _tools_para_llm() -> list[dict]:
+    """Tools del servidor MCP en formato de function-calling (OpenAI/Groq),
+    sin el parámetro `telefono` (se inyecta en _ejecutar_tool, nunca lo
+    decide el modelo)."""
     mcp_tools = await server.list_tools()
-    claude_tools = []
+    tools_llm = []
     for t in mcp_tools:
         schema = dict(t.input_schema)
         propiedades = dict(schema.get("properties", {}))
         propiedades.pop("telefono", None)
         schema["properties"] = propiedades
         schema["required"] = [r for r in schema.get("required", []) if r != "telefono"]
-        claude_tools.append({
-            "name": t.name,
-            "description": t.description or "",
-            "input_schema": schema,
+        tools_llm.append({
+            "type": "function",
+            "function": {
+                "name": t.name,
+                "description": t.description or "",
+                "parameters": schema,
+            },
         })
-    return claude_tools
+    return tools_llm
 
 
 async def _ejecutar_tool(nombre: str, argumentos: dict, telefono: str) -> str:
@@ -93,8 +108,9 @@ def _guardar_turno(telefono: str, texto_usuario: str, texto_asistente: str) -> N
 
 
 async def procesar_mensaje(telefono: str, texto: str) -> str:
-    """Punto de entrada único: llamado por app/whatsapp_webhook.py con el
-    número del remitente y el texto del mensaje. Devuelve el texto a responder."""
+    """Punto de entrada único: llamado por app/whatsapp_webhook.py (o
+    app/telegram_webhook.py) con el número del remitente y el texto del
+    mensaje. Devuelve el texto a responder."""
     with SessionLocal() as session:
         usuario = resolver_usuario(session, telefono)
         rol_valor = usuario.rol.value if usuario else None
@@ -105,41 +121,44 @@ async def procesar_mensaje(telefono: str, texto: str) -> str:
             "Pedile a la administración de St. Clare's que registre tu número."
         )
 
-    mensajes = _cargar_historial(telefono) + [{"role": "user", "content": texto}]
-    tools = await _tools_para_claude()
     system = f"{SYSTEM_PROMPT_BASE}\n\nRol del usuario actual: {rol_valor}."
+    mensajes = [{"role": "system", "content": system}] + _cargar_historial(telefono) + [
+        {"role": "user", "content": texto}
+    ]
+    tools = await _tools_para_llm()
 
     texto_final = "Perdón, tuve un problema procesando tu pedido. Probá de nuevo en un rato."
 
     for _ in range(MAX_TOOL_ITERATIONS):
-        respuesta = await client.messages.create(
+        respuesta = await client.chat.completions.create(
             model=MODEL,
             max_tokens=1024,
-            system=system,
             tools=tools,
             messages=mensajes,
         )
+        mensaje = respuesta.choices[0].message
 
-        if respuesta.stop_reason != "tool_use":
-            texto_final = "".join(
-                bloque.text for bloque in respuesta.content if bloque.type == "text"
-            ).strip() or "Listo."
+        if respuesta.choices[0].finish_reason != "tool_calls" or not mensaje.tool_calls:
+            texto_final = (mensaje.content or "").strip() or "Listo."
             break
 
-        respuesta_dict = respuesta.model_dump()
-        mensajes.append({"role": "assistant", "content": respuesta_dict["content"]})
+        mensajes.append({
+            "role": "assistant",
+            "content": mensaje.content,
+            "tool_calls": [tc.model_dump() for tc in mensaje.tool_calls],
+        })
 
-        tool_results = []
-        for bloque in respuesta.content:
-            if bloque.type != "tool_use":
-                continue
-            resultado_texto = await _ejecutar_tool(bloque.name, bloque.input, telefono)
-            tool_results.append({
-                "type": "tool_result",
-                "tool_use_id": bloque.id,
+        for tc in mensaje.tool_calls:
+            try:
+                argumentos = json.loads(tc.function.arguments or "{}")
+            except json.JSONDecodeError:
+                argumentos = {}
+            resultado_texto = await _ejecutar_tool(tc.function.name, argumentos, telefono)
+            mensajes.append({
+                "role": "tool",
+                "tool_call_id": tc.id,
                 "content": resultado_texto,
             })
-        mensajes.append({"role": "user", "content": tool_results})
 
     _guardar_turno(telefono, texto, texto_final)
     return texto_final
