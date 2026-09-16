@@ -359,10 +359,19 @@ def consultar_estado_cuenta(telefono: str, alumno_id: int | None = None) -> dict
 
 
 @server.tool()
-def consultar_morosos(telefono: str, sede_id: int | None = None) -> dict:
+def consultar_morosos(telefono: str, sede_id: int | None = None, periodo: str | None = None) -> dict:
     """Reporte de cuotas vencidas sin pagar (pendiente o parcial, vencimiento
     ya pasado), opcionalmente filtrado por sede (usar listar_sedes para
-    resolver el sede_id a partir del nombre). Rol mínimo: administrativo."""
+    resolver el sede_id a partir del nombre) y/o por período específico
+    (formato "YYYY-MM", ej. "2026-08" para agosto 2026 — filtra solo las
+    cuotas mensuales de ese mes, no aplica a matrícula/examen). Rol mínimo:
+    administrativo.
+
+    Importante: esto solo puede mostrar cuotas que EXISTEN como pendientes
+    en la base. Si un mes reciente todavía no tiene cuotas generadas para
+    todos los alumnos (ej. porque la carga de ese período no se hizo
+    todavía), esta tool no va a poder decir quién debía pagar y no pagó —
+    solo lista cuotas que ya están cargadas como impagas."""
     with SessionLocal() as session:
         require_rol(session, telefono, {RolWhatsappEnum.administrativo})
         query = (
@@ -380,6 +389,8 @@ def consultar_morosos(telefono: str, sede_id: int | None = None) -> dict:
                 if cuota.estado not in (EstadoCuotaEnum.pendiente, EstadoCuotaEnum.parcial):
                     continue
                 if cuota.fecha_vencimiento >= today:
+                    continue
+                if periodo is not None and cuota.periodo != periodo:
                     continue
                 alumno = inscripcion.alumno
                 entry = morosos.setdefault(alumno.id, {
