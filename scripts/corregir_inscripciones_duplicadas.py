@@ -8,16 +8,23 @@ DOS inscripciones activas en paralelo, y la vieja siguió teniendo cuotas
 "pendiente" que nunca se iban a cobrar — eso infló el número de morosidad
 del dashboard.
 
-Decisión (2026-09-16): el Excel es la fuente de verdad. Toda inscripción
-que NO haya sido creada por el import de hoy (se identifican por tener
-`fecha_inscripcion == 2026-03-01`, la fecha fija que pone ese script) para
-un alumno que SÍ tiene una inscripción nueva, queda **desactivada**, y sus
+Decisión (2026-09-16): el Excel es la fuente de verdad. La inscripción
+que NO haya sido creada por el import de hoy queda **desactivada**, y sus
 cuotas pendientes/parciales se **condonan** (se anulan, NO se marcan como
 pagadas).
 
-Solo actúa sobre alumnos con exactamente 1 inscripción "nueva" (del
-Excel) + 1 o más "viejas". Los casos con otra combinación (0 nuevas, o
-2+ nuevas) se listan aparte para revisión manual — no se tocan.
+Cómo se identifica cuál es "la de hoy": el intento original usaba
+`fecha_inscripcion == 2026-03-01` como marca, pero resultó que MUCHAS
+inscripciones viejas (de la migración de st-clares-app) también tienen
+esa fecha — no sirve para distinguir. En cambio, el **id** de la fila sí
+sirve: es un contador que solo crece, y el import de hoy corrió una sola
+vez, después de que existiera todo lo demás — así que para cualquier
+alumno con inscripciones duplicadas, la de mayor id es siempre la de hoy.
+
+Solo actúa sobre alumnos con EXACTAMENTE 2 inscripciones activas (el caso
+que se repite en la práctica). Si un alumno tiene 3 o más, se lista aparte
+para revisión manual — ahí sí podría haber una inscripción vieja
+legítimamente separada (ej. dos cursos en paralelo) y no quiero adivinar.
 
 Uso:
     DATABASE_URL=... python scripts/corregir_inscripciones_duplicadas.py --dry-run
@@ -26,7 +33,6 @@ Uso:
 import argparse
 import os
 import sys
-from datetime import date
 from decimal import Decimal
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -35,8 +41,6 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import Session
 
 from app.models import Alumno, Cuota, EstadoCuotaEnum, Inscripcion
-
-FECHA_MARCA_IMPORT = date(2026, 3, 1)
 
 
 def corregir(database_url: str, dry_run: bool) -> None:
@@ -55,12 +59,12 @@ def corregir(database_url: str, dry_run: bool) -> None:
         casos_ambiguos: list[tuple[Alumno, list[Inscripcion]]] = []
 
         for alumno_id, inscripciones in con_duplicado.items():
-            nuevas = [i for i in inscripciones if i.fecha_inscripcion == FECHA_MARCA_IMPORT]
-            viejas = [i for i in inscripciones if i.fecha_inscripcion != FECHA_MARCA_IMPORT]
-
-            if len(nuevas) != 1 or not viejas:
+            if len(inscripciones) != 2:
                 casos_ambiguos.append((session.get(Alumno, alumno_id), inscripciones))
                 continue
+
+            inscripciones_ordenadas = sorted(inscripciones, key=lambda i: i.id)
+            viejas = inscripciones_ordenadas[:-1]  # todas menos la de mayor id
 
             for ins_vieja in viejas:
                 ins_vieja.activa = False
