@@ -8,15 +8,12 @@ from alembic import context
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
+from app.db import normalizar_database_url
 from app.models import Base
 
 config = context.config
 
-_db_url = os.environ["DATABASE_URL"]
-if _db_url.startswith("postgres://"):
-    _db_url = _db_url.replace("postgres://", "postgresql://", 1)
-
-config.set_main_option("sqlalchemy.url", _db_url)
+config.set_main_option("sqlalchemy.url", normalizar_database_url(os.environ["DATABASE_URL"]))
 
 if config.config_file_name is not None:
     fileConfig(config.config_file_name)
