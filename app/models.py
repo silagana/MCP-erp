@@ -17,7 +17,7 @@ from datetime import date, datetime
 
 from sqlalchemy import (
     Boolean, Column, Date, DateTime, Enum, ForeignKey,
-    Integer, Numeric, String, Text, UniqueConstraint,
+    Integer, Numeric, String, Text, Time, UniqueConstraint,
 )
 from sqlalchemy.orm import DeclarativeBase, relationship
 
@@ -74,6 +74,17 @@ class RolWhatsappEnum(str, enum.Enum):
 class AlcanceReporteEnum(str, enum.Enum):
     completo = "completo"
     alumno = "alumno"
+    horarios = "horarios"
+    listados = "listados"
+
+class DiaSemanaEnum(str, enum.Enum):
+    lunes = "lunes"
+    martes = "martes"
+    miercoles = "miercoles"
+    jueves = "jueves"
+    viernes = "viernes"
+    sabado = "sabado"
+    domingo = "domingo"
 
 class RolMensajeEnum(str, enum.Enum):
     user = "user"
@@ -113,6 +124,7 @@ class Curso(Base):
     sede = relationship("Sede", back_populates="cursos")
     inscripciones = relationship("Inscripcion", back_populates="curso")
     precios_historicos = relationship("PrecioHistorico", back_populates="curso")
+    grupos = relationship("Grupo", back_populates="curso")
 
 
 class PrecioHistorico(Base):
@@ -171,6 +183,7 @@ class Inscripcion(Base):
     id = Column(Integer, primary_key=True)
     alumno_id = Column(Integer, ForeignKey("alumno.id"), nullable=False)
     curso_id = Column(Integer, ForeignKey("curso.id"), nullable=False)
+    grupo_id = Column(Integer, ForeignKey("grupo.id"))  # comisión concreta (día/horario/aula/profesor); opcional
     fecha_inscripcion = Column(Date, nullable=False)
     descuento_porcentaje = Column(Numeric(5, 2))   # 10.00 = 10%
     descuento_fijo = Column(Numeric(14, 2))
@@ -180,6 +193,7 @@ class Inscripcion(Base):
 
     alumno = relationship("Alumno", back_populates="inscripciones")
     curso = relationship("Curso", back_populates="inscripciones")
+    grupo = relationship("Grupo", back_populates="inscripciones")
     cuotas = relationship("Cuota", back_populates="inscripcion")
 
 
@@ -292,6 +306,63 @@ class Profesor(Base):
     activo = Column(Boolean, nullable=False, default=True)
 
     usuarios_whatsapp = relationship("UsuarioWhatsapp", back_populates="profesor")
+    grupos = relationship("Grupo", back_populates="profesor")
+
+
+class Aula(Base):
+    """Espacio físico (o "AULA ONLINE") de una sede, usado para armar el grid
+    semanal de horarios — ver docs/ARCHITECTURE.md sección 9 (consultar_horarios).
+    Cada sede arma sus propias aulas; no hay una lista fija compartida."""
+    __tablename__ = "aula"
+
+    id = Column(Integer, primary_key=True)
+    sede_id = Column(Integer, ForeignKey("sede.id"), nullable=False)
+    nombre = Column(String(80), nullable=False)
+    color = Column(String(7))  # hex opcional (ej. "#0D8657") para el grid; si no hay, se asigna por profesor
+    activa = Column(Boolean, nullable=False, default=True)
+    __table_args__ = (UniqueConstraint("sede_id", "nombre"),)
+
+    sede = relationship("Sede")
+    grupos = relationship("Grupo", back_populates="aula")
+
+
+class Grupo(Base):
+    """Comisión concreta de un Curso: día(s) de semana + horario + aula +
+    profesor fijos. Un mismo Curso (ej. "FCE") puede tener varios Grupos en
+    distintos horarios/aulas/profesores — el Excel de horarios por aula que
+    originó esta tabla (LISTAS BOEDO 2026.xlsx, hojas "AULAS LYM"/"AULAS MYJ")
+    ya trabajaba a este nivel de detalle, más fino que Curso."""
+    __tablename__ = "grupo"
+
+    id = Column(Integer, primary_key=True)
+    curso_id = Column(Integer, ForeignKey("curso.id"), nullable=False)
+    aula_id = Column(Integer, ForeignKey("aula.id"))
+    profesor_id = Column(Integer, ForeignKey("profesor.id"))
+    nombre = Column(String(120))  # etiqueta libre opcional, ej. "Grupo Santa Cruz"
+    hora_inicio = Column(Time, nullable=False)
+    hora_fin = Column(Time, nullable=False)
+    cupo_maximo = Column(Integer)
+    activo = Column(Boolean, nullable=False, default=True)
+
+    curso = relationship("Curso", back_populates="grupos")
+    aula = relationship("Aula", back_populates="grupos")
+    profesor = relationship("Profesor", back_populates="grupos")
+    dias = relationship("GrupoDia", back_populates="grupo", cascade="all, delete-orphan")
+    inscripciones = relationship("Inscripcion", back_populates="grupo")
+
+
+class GrupoDia(Base):
+    """Días de semana en que se dicta un Grupo (ej. lunes + miércoles a la
+    misma hora) — tabla aparte en vez de un solo campo porque un grupo
+    puede repetirse varios días con el mismo horario/aula/profesor."""
+    __tablename__ = "grupo_dia"
+
+    id = Column(Integer, primary_key=True)
+    grupo_id = Column(Integer, ForeignKey("grupo.id"), nullable=False)
+    dia_semana = Column(Enum(DiaSemanaEnum), nullable=False)
+    __table_args__ = (UniqueConstraint("grupo_id", "dia_semana"),)
+
+    grupo = relationship("Grupo", back_populates="dias")
 
 
 class UsuarioWhatsapp(Base):
@@ -340,8 +411,10 @@ class ReporteToken(Base):
     usuario_whatsapp_id = Column(Integer, ForeignKey("usuario_whatsapp.id"), nullable=False)
     alcance = Column(Enum(AlcanceReporteEnum), nullable=False)
     alumno_id = Column(Integer, ForeignKey("alumno.id"))  # solo si alcance == alumno
+    sede_id = Column(Integer, ForeignKey("sede.id"))  # solo si alcance == horarios
     creado = Column(DateTime, nullable=False, default=datetime.utcnow)
     expira = Column(DateTime, nullable=False)
 
     usuario = relationship("UsuarioWhatsapp")
     alumno = relationship("Alumno")
+    sede = relationship("Sede")

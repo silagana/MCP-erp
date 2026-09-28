@@ -72,6 +72,7 @@ La respuesta vuelve por el mismo camino. Reportes pesados o de tablas complejas 
 - `MovimientoBancario`, `Pago`, `Imputacion` (distribución FIFO de pagos contra cuotas impagas), `AliasCobroAlumno` (alias guardado por alumno para matchear transferencias), `PatronNoAlumno`.
 - `AuditLog`.
 - **Nuevas, no existían en st-clares-app:** `Profesor`, `UsuarioWhatsapp`.
+- **Nuevas, agregadas 2026-09-28 (horarios):** `Aula` (por sede), `Grupo` (comisión concreta de un `Curso`: aula/profesor/horario/cupo — un mismo `Curso` puede tener varios `Grupo`), `GrupoDia` (días de semana en que se dicta). `Inscripcion.grupo_id` (opcional) vincula al alumno con su comisión concreta, además del `Curso` general. Origen: `LISTAS BOEDO 2026.xlsx`, hojas "AULAS LYM"/"AULAS MYJ" — un grid semanal aula×horario coloreado por profesor que la secretaría armaba a mano en Excel.
 
 Services ya copiados a `app/services/` y funcionando (misma lógica que el origen): `enrollment.py` (generación de cuotas, recálculo de precios respetando pagos parciales, altas/bajas, inscripción provisional), `reconciliation.py` (matching por CUIT/alias/fuzzy con `rapidfuzz`, FIFO), `bank_import.py` (parseo de resumen bancario PDF/TSV).
 
@@ -113,14 +114,20 @@ Organizado por si ya existe la lógica de base (se envuelve) o hay que crearla.
 | `consultar_estado_cuenta` | alumno (propio) / administrativo (cualquiera) | lectura de `Cuota` + `Imputacion` |
 | `consultar_morosos` | administrativo | reporte agregado de `Cuota.estado in (pendiente, parcial)` vencidas |
 
-### Cobros y conciliación (envuelve `services/reconciliation.py`, `bank_import.py`; crea `cash_payments.py`)
+### Cobros y conciliación (envuelve `services/reconciliation.py`, `bank_import.py`, `cash_payments.py`)
+
+**Rediseño 2026-09-28 — conciliación a posteriori.** Antes, conciliar y cobrar eran el mismo paso: un `Pago` solo se creaba DESDE un `MovimientoBancario` ya matcheado (`aplicar_conciliacion`), así que el cobro quedaba registrado recién cuando llegaba el resumen bancario del mes. Ahora se separan:
+1. **Cobrar, en el momento** — `registrar_pago` crea el `Pago` (efectivo o transferencia) apenas se cobra, sin `movimiento_bancario_id`.
+2. **Conciliar, una vez al mes** — después de importar el resumen bancario, `conciliar_movimientos_pendientes` cruza cada `MovimientoBancario` contra los `Pago` ya cargados (mismo importe, mismo alumno vía CUIT/alias/fuzzy, `movimiento_bancario_id` todavía nulo) y los vincula automáticamente si el match es de confianza alta — no crea nada nuevo, solo confirma. Lo que no matchea solo (posible cobro que nunca se registró, o un movimiento que no es un pago de alumno) queda para revisar a mano con `sugerir_conciliacion`/`aplicar_conciliacion`, que todavía puede crear un `Pago` nuevo en el momento (modo excepcional, `imputaciones`) para esos casos.
+
 | Tool | Rol mínimo | Qué hace |
 |---|---|---|
+| `registrar_pago` | administrativo | `cash_payments.registrar_pago` — crea `Pago` (efectivo o transferencia) sin movimiento bancario; FIFO contra cuotas impagas o `cuota_id` puntual |
 | `importar_resumen_bancario` | administrativo | `import_movimientos` — sube el archivo del banco, no por WhatsApp sino por carga periódica |
-| `sugerir_conciliacion` | administrativo | `sugerir_conciliacion` — devuelve matches por CUIT/alias/fuzzy con nivel de confianza |
-| `aplicar_conciliacion` | administrativo | `aplicar_conciliacion` — confirma el match y crea `Pago` + `Imputacion` |
-| `registrar_pago_con_comprobante` **(nuevo)** | administrativo | secretaría manda imagen de transferencia por WhatsApp; Claude (visión nativa) extrae monto/fecha/alias; propone alumno; **pide confirmación antes de aplicar** — atajo rápido, la conciliación de fondo sigue siendo el resumen bancario completo |
-| `registrar_pago_efectivo` **(nuevo, completa el stub `cash_payments.py`)** | administrativo | registra `Pago(medio=efectivo)` + `operador_efectivo`, imputa FIFO con `fifo_distribuir` |
+| `conciliar_movimientos_pendientes` **(nuevo)** | administrativo | `reconciliation.conciliar_pendientes` — corrida mensual, vincula automáticamente movimientos contra pagos ya registrados |
+| `sugerir_conciliacion` | administrativo | `sugerir_conciliacion` — prioriza un `Pago` ya registrado (mismo importe/alumno); si no hay, cae al matching viejo por CUIT/alias/fuzzy con nivel de confianza |
+| `aplicar_conciliacion` | administrativo | con `pago_id`: solo vincula (uso normal); con `imputaciones`: crea `Pago` + `Imputacion` nuevas (excepción, comportamiento previo a este rediseño) |
+| `registrar_pago_con_comprobante` **(pendiente)** | administrativo | secretaría manda imagen de transferencia por WhatsApp; Claude (visión nativa) extrae monto/fecha/alias; propone alumno; **pide confirmación antes de aplicar** — atajo que llama a `registrar_pago`, necesita visión en el orchestrator |
 | `guardar_alias_cobro` | administrativo | `guardar_alias_cobro` — para que la próxima transferencia de ese alumno matchee sola |
 
 ### Comunicación saliente (completa el stub `whatsapp_text.py`) — **diseñada ahora, NO se activa en este piloto**
@@ -138,12 +145,19 @@ Organizado por si ya existe la lógica de base (se envuelve) o hay que crearla.
 - **Envío de factura mensual:** al generar las cuotas del mes (`generate_cuotas_masivas`), se arma automáticamente el comprobante correspondiente y se manda por WhatsApp al referente de pago (`ReferentePago`), no al alumno si es menor — usa el vínculo ya modelado. Antes de tener AFIP integrado, el comprobante es un PDF simple con los datos del instituto; cuando AFIP esté, se reemplaza por el comprobante fiscal con CAE.
 - Todo esto queda gateado por rol `sistema` (cron), nunca disparado por texto libre de un usuario, para que no dependa de que alguien se acuerde de pedirlo.
 
-### Profesores y horarios
+### Profesores y horarios (envuelve `services/horarios.py`; `Aula`/`Grupo`/`GrupoDia`)
 | Tool | Rol mínimo | Qué hace |
 |---|---|---|
 | `registrar_profesor` | owner | alta, tarifa por hora |
-| `marcar_asistencia` | profesor (solo sus cohortes) | requiere sumar tabla de asistencias, no está en el modelo actual |
-| `consultar_horarios` | todos, filtrado | requiere sumar tabla de horarios, no está en el modelo actual |
+| `crear_aula` | administrativo | alta de aula física/virtual en una sede |
+| `listar_aulas` | todos | lectura, filtro opcional por sede |
+| `listar_grupos` | todos | lectura de comisiones con día/horario/aula/profesor, filtros por curso/sede/profesor |
+| `crear_grupo` | administrativo | alta de comisión (día(s)+horario+aula+profesor); valida choques con `horarios.detectar_conflictos` antes de guardar |
+| `mover_grupo` | administrativo | cambia aula/profesor/horario/días de una comisión existente; misma validación de choques |
+| `asignar_alumno_a_grupo` | administrativo | vincula `Inscripcion.grupo_id` a una comisión concreta del mismo curso |
+| `generar_dashboard_horarios` | profesor | link al grid semanal aula×horario (HTML) — mismo mecanismo de token que `generar_dashboard`, alcance `horarios`. Un solo link para todas las sedes (selector adentro); agrupa los grupos en dos grids, "Lunes y Miércoles" y "Martes y Jueves" (así se dictan siempre acá, igual que las hojas "AULAS LYM"/"AULAS MYJ" del Excel — un `Grupo` con días fuera de ese par cae en "Otros días") |
+| `generar_dashboard_listados` **(nuevo)** | administrativo | link al listado de alumnos por curso/comisión de una sede (HTML), con selector de curso adentro — misma vista que la hoja "LISTAS" del Excel, pero **sin** matrícula ni saldo (esta vista es solo "quién está en cada curso"; para plata está `generar_dashboard`/`consultar_estado_cuenta`); alcance `listados`. No se le da a profesor porque muestra TODOS los cursos de la sede, no solo los suyos |
+| `marcar_asistencia` | profesor (solo sus cohortes) | requiere sumar tabla de asistencias, no está en el modelo actual — pendiente |
 
 ### Futuro
 | Tool | Rol mínimo | Qué hace |

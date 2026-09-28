@@ -33,11 +33,16 @@ class SugerenciaImputacion:
 class SugerenciaConciliacion:
     movimiento_id: int
     confianza: str          # 'alto' | 'medio' | 'bajo' | ''
-    metodo: str             # 'cuit' | 'cuit_multiple' | 'fuzzy_nombre' | 'fuzzy_referencia' | 'patron_no_alumno' | ''
+    metodo: str             # 'pago_existente' | 'cuit' | 'cuit_multiple' | 'fuzzy_nombre' | 'fuzzy_referencia' | 'patron_no_alumno' | ''
     imputaciones: list[SugerenciaImputacion] = field(default_factory=list)
     sin_match: bool = False
     es_no_alumno: bool = False
     excedente: Decimal = field(default_factory=lambda: Decimal("0.00"))
+    pago_existente_id: int | None = None
+    """Si está seteado, ya hay un Pago cargado (vía registrar_pago o una
+    conciliación anterior) que probablemente es este movimiento — aplicar_conciliacion
+    con este id solo VINCULA, no crea Pago/Imputacion nuevas. Ver
+    conciliar_pendientes, que es el flujo mensual pensado para esto."""
 
 
 # ── FIFO ───────────────────────────────────────────────────────────────────
@@ -98,6 +103,80 @@ def fifo_distribuir(
 
 # ── Matching ───────────────────────────────────────────────────────────────
 
+def _buscar_pago_existente(session: Session, mov: MovimientoBancario, alumno_ids: list[int]) -> Pago | None:
+    """Busca, entre los pagos ya cargados (registrar_pago) y todavía sin
+    vincular a ningún movimiento, uno que probablemente sea este mismo
+    cobro: mismo importe, medio transferencia, imputado a alguno de los
+    alumnos candidatos. Con más de un candidato, se queda con el de fecha
+    más cercana al movimiento — no es perfecto, pero es el caso raro
+    (dos pagos del mismo importe al mismo alumno el mismo mes)."""
+    candidatos = (
+        session.query(Pago)
+        .join(Imputacion, Imputacion.pago_id == Pago.id)
+        .join(Cuota, Imputacion.cuota_id == Cuota.id)
+        .join(Inscripcion, Cuota.inscripcion_id == Inscripcion.id)
+        .filter(
+            Pago.movimiento_bancario_id.is_(None),
+            Pago.medio == MedioPagoEnum.transferencia,
+            Pago.monto == mov.importe,
+            Inscripcion.alumno_id.in_(alumno_ids),
+        )
+        .distinct()
+        .all()
+    )
+    if not candidatos:
+        return None
+    candidatos.sort(key=lambda p: abs((p.fecha - mov.fecha).days))
+    return candidatos[0]
+
+
+def _describir_pago(pago: Pago) -> list[SugerenciaImputacion]:
+    """Traduce las Imputaciones de un Pago ya existente al mismo formato
+    que devuelve fifo_distribuir, para mostrar en la sugerencia qué es lo
+    que se está proponiendo vincular (no volver a imputar)."""
+    out = []
+    for imp in pago.imputaciones:
+        cuota = imp.cuota
+        alumno = cuota.inscripcion.alumno
+        tipo_labels = {"matricula": "Matrícula", "mensual": f"Cuota {cuota.numero_cuota}", "examen": "Examen"}
+        desc = tipo_labels.get(cuota.tipo.value, cuota.tipo.value)
+        if cuota.periodo:
+            desc += f" {cuota.periodo}"
+        out.append(SugerenciaImputacion(
+            alumno_id=alumno.id,
+            alumno_nombre=f"{alumno.apellido}, {alumno.nombre}",
+            cuota_id=cuota.id,
+            cuota_descripcion=desc,
+            monto_a_imputar=imp.monto_imputado,
+            saldo_restante_cuota=cuota.saldo_pendiente,
+        ))
+    return out
+
+
+def _sugerir_para_alumnos(
+    session: Session,
+    mov: MovimientoBancario,
+    alumno_ids: list[int],
+    confianza: str,
+    metodo: str,
+) -> SugerenciaConciliacion:
+    """Con un alumno (o varios) ya identificado como probable pagador,
+    prioriza vincular un Pago ya registrado (flujo normal, a posteriori,
+    ver conciliar_pendientes) — solo si no hay ninguno cae al viejo
+    comportamiento de proponer crear un Pago nuevo con FIFO."""
+    pago_existente = _buscar_pago_existente(session, mov, alumno_ids)
+    if pago_existente:
+        return SugerenciaConciliacion(
+            movimiento_id=mov.id, confianza="alto", metodo="pago_existente",
+            imputaciones=_describir_pago(pago_existente), pago_existente_id=pago_existente.id,
+        )
+    imps, exc = fifo_distribuir(session, alumno_ids, Decimal(str(mov.importe)))
+    return SugerenciaConciliacion(
+        movimiento_id=mov.id, confianza=confianza, metodo=metodo,
+        imputaciones=imps, excedente=exc,
+    )
+
+
 def sugerir_conciliacion(
     session: Session,
     movimiento_id: int,
@@ -105,8 +184,6 @@ def sugerir_conciliacion(
     mov = session.get(MovimientoBancario, movimiento_id)
     if not mov:
         raise ValueError(f"Movimiento {movimiento_id} no encontrado")
-
-    monto = Decimal(str(mov.importe))
 
     # ── 1. CUIT match ──────────────────────────────────────────────────────
     if mov.cuit_detectado:
@@ -118,18 +195,10 @@ def sugerir_conciliacion(
         al_ids = list({r.alumno_id for r in refs})
 
         if len(al_ids) == 1:
-            imps, exc = fifo_distribuir(session, al_ids, monto)
-            return SugerenciaConciliacion(
-                movimiento_id=movimiento_id, confianza="alto", metodo="cuit",
-                imputaciones=imps, excedente=exc,
-            )
+            return _sugerir_para_alumnos(session, mov, al_ids, "alto", "cuit")
 
         if len(al_ids) > 1:
-            imps, exc = fifo_distribuir(session, al_ids, monto)
-            return SugerenciaConciliacion(
-                movimiento_id=movimiento_id, confianza="medio", metodo="cuit_multiple",
-                imputaciones=imps, excedente=exc,
-            )
+            return _sugerir_para_alumnos(session, mov, al_ids, "medio", "cuit_multiple")
 
     # ── 1.5. Alias cobro guardado por el usuario ───────────────────────────
     if mov.nombre_pagador_detectado:
@@ -143,11 +212,7 @@ def sugerir_conciliacion(
                 best_score = score
                 best_alias = a
         if best_alias and best_score >= 85:
-            imps, exc = fifo_distribuir(session, [best_alias.alumno_id], monto)
-            return SugerenciaConciliacion(
-                movimiento_id=movimiento_id, confianza="alto", metodo="alias_cobro",
-                imputaciones=imps, excedente=exc,
-            )
+            return _sugerir_para_alumnos(session, mov, [best_alias.alumno_id], "alto", "alias_cobro")
 
     # ── 2. Fuzzy nombre_pagador vs referente.nombre_completo ───────────────
     if mov.nombre_pagador_detectado:
@@ -166,11 +231,7 @@ def sugerir_conciliacion(
             confianza = "medio" if len(al_ids) == 1 else "bajo"
             # Use top match alumno only
             best_al_id = matches[0][0].alumno_id
-            imps, exc = fifo_distribuir(session, [best_al_id], monto)
-            return SugerenciaConciliacion(
-                movimiento_id=movimiento_id, confianza=confianza, metodo="fuzzy_nombre",
-                imputaciones=imps, excedente=exc,
-            )
+            return _sugerir_para_alumnos(session, mov, [best_al_id], confianza, "fuzzy_nombre")
 
     # ── 3. Fuzzy referencia_detectada vs alumno nombre+apellido ───────────
     if mov.referencia_detectada:
@@ -189,11 +250,7 @@ def sugerir_conciliacion(
 
         if matches:
             best_id = matches[0][0].id
-            imps, exc = fifo_distribuir(session, [best_id], monto)
-            return SugerenciaConciliacion(
-                movimiento_id=movimiento_id, confianza="bajo", metodo="fuzzy_referencia",
-                imputaciones=imps, excedente=exc,
-            )
+            return _sugerir_para_alumnos(session, mov, [best_id], "bajo", "fuzzy_referencia")
 
     # ── 4. Patron no-alumno ────────────────────────────────────────────────
     check_str = (mov.nombre_pagador_detectado or mov.concepto_raw or "").lower()
@@ -214,11 +271,26 @@ def sugerir_conciliacion(
 def aplicar_conciliacion(
     session: Session,
     movimiento_id: int,
-    imputaciones: list[dict],   # [{"cuota_id": int, "monto_imputado": Decimal}]
+    imputaciones: list[dict] | None = None,   # [{"cuota_id": int, "monto_imputado": Decimal}]
     operador: str | None = None,
+    pago_id: int | None = None,
 ) -> int:
-    """Commit approved reconciliation. Returns pago_id."""
+    """Confirma una conciliación. Dos modos:
+    - pago_id: vincula un Pago YA registrado (flujo normal desde 2026-09-28,
+      ver conciliar_pendientes / registrar_pago) — no crea Pago ni
+      Imputacion, ya existen; solo setea movimiento_bancario_id.
+    - imputaciones: crea un Pago nuevo en el momento (excepción — para
+      movimientos sin un pago pre-cargado). Comportamiento previo a
+      2026-09-28, se mantiene como fallback manual.
+    Devuelve el pago_id resultante."""
     mov = session.get(MovimientoBancario, movimiento_id)
+
+    if pago_id is not None:
+        pago = session.get(Pago, pago_id)
+        pago.movimiento_bancario_id = movimiento_id
+        mov.estado = EstadoMovimientoEnum.conciliado
+        log_action(session, "CONCILIAR_VINCULAR", "movimiento_bancario", movimiento_id, {"pago_id": pago.id})
+        return pago.id
 
     pago = Pago(
         fecha=mov.fecha,
@@ -231,7 +303,7 @@ def aplicar_conciliacion(
     session.flush()
 
     total_imputado = Decimal("0.00")
-    for imp in imputaciones:
+    for imp in imputaciones or []:
         cuota = session.get(Cuota, imp["cuota_id"])
         monto_imp = Decimal(str(imp["monto_imputado"]))
         session.add(Imputacion(
@@ -258,6 +330,43 @@ def aplicar_conciliacion(
         "pago_id": pago.id, "total_imputado": str(total_imputado),
     })
     return pago.id
+
+
+def conciliar_pendientes(session: Session) -> dict:
+    """Flujo mensual: corre sugerir_conciliacion sobre todos los
+    MovimientoBancario pendientes y vincula automáticamente los que
+    matchean con confianza alta contra un Pago ya cargado (registrar_pago,
+    o una conciliación manual anterior) — no crea nada nuevo, solo
+    confirma el cruce. Pensado para correr después de importar el resumen
+    bancario del mes, con los cobros del mes ya registrados de antemano.
+    Lo que no matchea (confianza baja/media, o sin pago existente) queda
+    pendiente para revisar a mano con sugerir_conciliacion/aplicar_conciliacion
+    — puede ser un pago que nunca se cargó, o un movimiento que no es un
+    cobro de alumno."""
+    pendientes = (
+        session.query(MovimientoBancario)
+        .filter(MovimientoBancario.estado == EstadoMovimientoEnum.pendiente)
+        .all()
+    )
+
+    vinculados = []
+    a_revisar = []
+    for mov in pendientes:
+        sugerencia = sugerir_conciliacion(session, mov.id)
+        if sugerencia.pago_existente_id and sugerencia.confianza == "alto":
+            aplicar_conciliacion(session, mov.id, pago_id=sugerencia.pago_existente_id)
+            vinculados.append({"movimiento_id": mov.id, "pago_id": sugerencia.pago_existente_id})
+        else:
+            a_revisar.append({
+                "movimiento_id": mov.id,
+                "importe": mov.importe,
+                "fecha": mov.fecha.isoformat(),
+                "confianza": sugerencia.confianza,
+                "metodo": sugerencia.metodo,
+                "sin_match": sugerencia.sin_match,
+            })
+
+    return {"vinculados": vinculados, "a_revisar": a_revisar}
 
 
 def guardar_alias_cobro(session: Session, alumno_id: int, alias: str) -> bool:
