@@ -1,6 +1,7 @@
 """Conexión a la Postgres propia de MCP-erp — independiente de st-clares-app
 (ver docs/ARCHITECTURE.md, sección "Independencia de st-clares-app")."""
 import os
+import sys
 
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
@@ -22,7 +23,14 @@ def normalizar_database_url(url: str) -> str:
     return url
 
 
-DATABASE_URL = normalizar_database_url(os.environ["DATABASE_URL"])
+_raw_url = os.environ["DATABASE_URL"]
+DATABASE_URL = normalizar_database_url(_raw_url)
+# Diagnóstico temporal (2026-09-28): el arranque en Railway falla con
+# "No module named 'psycopg'" incluso después de normalizar acá arriba —
+# necesitamos ver el esquema REAL para saber qué formato manda Railway.
+# Solo imprime lo que hay antes de "://" (nunca user/pass/host), sacar
+# después de confirmar la causa.
+print(f"[db] esquema DATABASE_URL crudo={_raw_url.split('://', 1)[0]!r} normalizado={DATABASE_URL.split('://', 1)[0]!r}", file=sys.stderr)
 
 engine = create_engine(DATABASE_URL, future=True)
 SessionLocal = sessionmaker(bind=engine, autoflush=False, autocommit=False)

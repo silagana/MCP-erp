@@ -3,6 +3,13 @@ openai>=1.0.0
 sqlalchemy>=2.0.30
 alembic>=1.13.2
 psycopg2-binary>=2.9.9
+# Respaldo del driver de arriba: en producción (Railway) apareció un
+# DATABASE_URL que SQLAlchemy resolvió al dialecto psycopg (v3, no
+# psycopg2) pese a normalizar el esquema a "postgresql://" plano en
+# app/db.py — no se pudo confirmar la causa exacta sin ver la URL real
+# (2026-09-28), así que se instalan los dos drivers en vez de apostar a
+# cuál va a pedir SQLAlchemy.
+psycopg[binary]>=3.1
 python-dotenv>=1.0.1
 fastapi>=0.115.0
 uvicorn>=0.30.0
